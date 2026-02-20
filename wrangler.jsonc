@@ -1,0 +1,22 @@
+{
+  "name": "md-file-viewer",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-02-20",
+  "assets": {
+    "directory": "public",
+  },
+  // R2 bucket for uploaded markdown files
+  "r2_buckets": [
+    {
+      "binding": "MD_FILES",
+      "bucket_name": "md-file-viewer-files",
+    },
+  ],
+  // KV namespace for history + file metadata
+  "kv_namespaces": [
+    {
+      "binding": "HISTORY",
+      "id": "4b5e3a41933d4e08b4e048d12d095a96",
+    },
+  ],
+}
