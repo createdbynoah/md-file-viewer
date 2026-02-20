@@ -8,6 +8,7 @@ on:
       - "public/**"
       - "wrangler.jsonc"
       - "package.json"
+      - ".github/workflows/deploy.yml"
 
 jobs:
   deploy:
