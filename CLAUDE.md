@@ -53,6 +53,12 @@ All routes are prefixed with `/api/`. Auth-protected unless noted:
 
 GitHub Actions (`.github/workflows/deploy.yml`) auto-deploys to Cloudflare Workers on push to `main` when `src/`, `public/`, `wrangler.jsonc`, or `package.json` change. Requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repo secrets.
 
+## Routing
+
+**Server-side:** A catch-all Hono route at the bottom of `src/worker.js` matches `/<uuid>` paths and serves `index.html` via the `ASSETS` binding — this is the SPA fallback so direct file links and browser refresh work. Non-UUID paths return 404.
+
+**Client-side:** `public/js/app.js` uses `history.pushState` / `popstate` for navigation. Viewing a file pushes `/<uuid>` to the URL; going back pushes `/`. Functions that change views accept `{ updateUrl: false }` to prevent double-pushing during `popstate` events. On initial load after auth, `showApp()` checks for a deep-linked file ID in the URL path.
+
 ## Key Patterns
 
 - Client-side markdown rendering using CDN-loaded markdown-it and highlight.js (not bundled)
@@ -60,3 +66,4 @@ GitHub Actions (`.github/workflows/deploy.yml`) auto-deploys to Cloudflare Worke
 - Sidebar uses CSS `margin-left` transition on desktop, `transform: translateX` on mobile (<768px)
 - History is capped at 100 entries, stored as a single KV value
 - File metadata stored separately in KV (`meta:{uuid}`) from file content in R2
+- SPA routing uses strict UUID regex on both server and client — only valid file paths get the fallback
