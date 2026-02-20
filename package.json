@@ -1,0 +1,21 @@
+{
+  "name": "md-file-viewer",
+  "version": "1.0.0",
+  "description": "Lightweight self-hosted Markdown file viewer",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.27.0",
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "chokidar": "^5.0.0",
+    "dotenv": "^17.3.1",
+    "hono": "^4.12.0"
+  }
+}
