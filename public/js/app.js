@@ -119,8 +119,8 @@ function setTheme(theme) {
   themeIconSun.hidden = isDark;
   themeIconMoon.hidden = !isDark;
   hljsThemeLink.href = isDark
-    ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css'
-    : 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css';
+    ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css'
+    : 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css';
 }
 
 function initTheme() {
@@ -139,9 +139,13 @@ themeToggle.addEventListener('click', () => {
 
 // ── Sidebar ─────────────────────────────────────────────────────────────────
 
+function isMobile() {
+  return window.matchMedia('(max-width: 767px)').matches;
+}
+
 function openSidebar() {
   sidebar.classList.add('open');
-  sidebarOverlay.hidden = false;
+  if (isMobile()) sidebarOverlay.hidden = false;
 }
 
 function closeSidebar() {
@@ -183,7 +187,7 @@ function renderHistoryList(history) {
 
     const sourceTag = document.createElement('span');
     sourceTag.className = 'history-source';
-    sourceTag.textContent = entry.source === 'watch' ? 'watch' : entry.source === 'paste' ? 'paste' : 'file';
+    sourceTag.textContent = entry.source === 'paste' ? 'paste' : 'file';
 
     const name = document.createElement('span');
     name.className = 'history-name';
@@ -218,8 +222,8 @@ async function viewFile(id) {
     const data = await res.json();
     renderMarkdown(data.content, data.filename, id);
     currentFileId = id;
-    currentFileSource = id.startsWith('watch:') ? 'watch' : 'upload';
-    deleteFileBtn.hidden = currentFileSource === 'watch';
+    currentFileSource = 'upload';
+    deleteFileBtn.hidden = false;
     closeSidebar();
     loadHistory();
   } catch {}
@@ -243,7 +247,7 @@ function showInputArea() {
 backBtn.addEventListener('click', showInputArea);
 
 deleteFileBtn.addEventListener('click', async () => {
-  if (!currentFileId || currentFileSource === 'watch') return;
+  if (!currentFileId) return;
   if (!confirm('Delete this file?')) return;
   await api(`/api/files/${encodeURIComponent(currentFileId)}`, { method: 'DELETE' });
   showInputArea();
