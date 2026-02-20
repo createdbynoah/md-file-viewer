@@ -247,4 +247,19 @@ app.delete('/api/history/:id', async (c) => {
   return c.json({ success: true });
 });
 
+// ── SPA fallback ────────────────────────────────────────────────────────────
+// Serve index.html for /<uuid> paths so direct links & browser refresh work.
+
+const UUID_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+app.get('*', async (c) => {
+  const path = new URL(c.req.url).pathname;
+  if (UUID_RE.test(path)) {
+    const url = new URL(c.req.url);
+    url.pathname = '/index.html';
+    return c.env.ASSETS.fetch(new Request(url, c.req.raw));
+  }
+  return c.notFound();
+});
+
 export default app;

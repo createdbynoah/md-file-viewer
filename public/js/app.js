@@ -45,6 +45,30 @@ const hljsThemeLink = document.getElementById('hljs-theme');
 let currentFileId = null;
 let currentFileSource = null;
 
+// ── Client-side routing ─────────────────────────────────────────────────────
+
+const UUID_RE = /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+function getFileIdFromPath() {
+  const match = location.pathname.match(UUID_RE);
+  return match ? match[1] : null;
+}
+
+function pushUrl(path) {
+  if (location.pathname !== path) {
+    history.pushState(null, '', path);
+  }
+}
+
+window.addEventListener('popstate', () => {
+  const id = getFileIdFromPath();
+  if (id) {
+    viewFile(id, { updateUrl: false });
+  } else {
+    showInputArea({ updateUrl: false });
+  }
+});
+
 // ── API helpers ─────────────────────────────────────────────────────────────
 
 async function api(path, opts = {}) {
@@ -84,6 +108,11 @@ function showApp() {
   loginScreen.hidden = true;
   appScreen.hidden = false;
   loadHistory();
+  // Deep-link: if the URL contains a file ID, load it
+  const deepLinkId = getFileIdFromPath();
+  if (deepLinkId) {
+    viewFile(deepLinkId, { updateUrl: false });
+  }
 }
 
 loginForm.addEventListener('submit', async (e) => {
@@ -215,7 +244,7 @@ clearHistoryBtn.addEventListener('click', async () => {
 
 // ── File viewing ────────────────────────────────────────────────────────────
 
-async function viewFile(id) {
+async function viewFile(id, { updateUrl = true } = {}) {
   try {
     const res = await api(`/api/files/${encodeURIComponent(id)}`);
     if (!res.ok) return;
@@ -224,6 +253,7 @@ async function viewFile(id) {
     currentFileId = id;
     currentFileSource = 'upload';
     deleteFileBtn.hidden = false;
+    if (updateUrl) pushUrl(`/${id}`);
     closeSidebar();
     loadHistory();
   } catch {}
@@ -236,12 +266,13 @@ function renderMarkdown(content, title, id) {
   viewerArea.hidden = false;
 }
 
-function showInputArea() {
+function showInputArea({ updateUrl = true } = {}) {
   inputArea.hidden = false;
   viewerArea.hidden = true;
   viewerTitle.textContent = 'Markdown Viewer';
   currentFileId = null;
   currentFileSource = null;
+  if (updateUrl) pushUrl('/');
 }
 
 backBtn.addEventListener('click', showInputArea);
