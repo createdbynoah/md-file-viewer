@@ -199,6 +199,29 @@ body {
   max-width: 50vw;
 }
 
+.topbar-title[data-editable="true"] {
+  cursor: text;
+  border-bottom: 1px dashed var(--text-tertiary);
+  padding-bottom: 1px;
+}
+
+.topbar-title[data-editable="true"]:hover {
+  border-bottom-color: var(--accent);
+}
+
+.topbar-title-input {
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: inherit;
+  background: var(--bg-secondary);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  max-width: 50vw;
+  outline: none;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
