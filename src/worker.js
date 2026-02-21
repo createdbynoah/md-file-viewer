@@ -443,6 +443,82 @@ app.delete('/api/folders/:id', async (c) => {
   return c.json({ success: true });
 });
 
+app.post('/api/folders/:id/files', async (c) => {
+  const folderId = c.req.param('id');
+  const { fileId } = await c.req.json();
+  if (!fileId) return c.json({ error: 'fileId is required' }, 400);
+
+  const folders = await readFolders(c.env.HISTORY);
+  const folder = folders.find((f) => f.id === folderId);
+  if (!folder) return c.json({ error: 'Folder not found' }, 404);
+
+  const metaJson = await c.env.HISTORY.get(`meta:${fileId}`);
+  if (!metaJson) return c.json({ error: 'File not found' }, 404);
+
+  for (const f of folders) {
+    f.fileIds = f.fileIds.filter((id) => id !== fileId);
+  }
+
+  folder.fileIds.push(fileId);
+  await writeFolders(c.env.HISTORY, folders);
+
+  const meta = JSON.parse(metaJson);
+  meta.folderId = folderId;
+  await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
+
+  return c.json({ success: true });
+});
+
+app.delete('/api/folders/:id/files/:fileId', async (c) => {
+  const folderId = c.req.param('id');
+  const fileId = c.req.param('fileId');
+
+  const folders = await readFolders(c.env.HISTORY);
+  const folder = folders.find((f) => f.id === folderId);
+  if (!folder) return c.json({ error: 'Folder not found' }, 404);
+
+  folder.fileIds = folder.fileIds.filter((id) => id !== fileId);
+  await writeFolders(c.env.HISTORY, folders);
+
+  const metaJson = await c.env.HISTORY.get(`meta:${fileId}`);
+  if (metaJson) {
+    try {
+      const meta = JSON.parse(metaJson);
+      delete meta.folderId;
+      await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
+    } catch { /* ignore corrupt meta */ }
+  }
+
+  return c.json({ success: true });
+});
+
+app.post('/api/folders/:id/files/:fileId/move', async (c) => {
+  const sourceFolderId = c.req.param('id');
+  const fileId = c.req.param('fileId');
+  const { targetFolderId } = await c.req.json();
+  if (!targetFolderId) return c.json({ error: 'targetFolderId is required' }, 400);
+
+  const folders = await readFolders(c.env.HISTORY);
+  const source = folders.find((f) => f.id === sourceFolderId);
+  const target = folders.find((f) => f.id === targetFolderId);
+  if (!source || !target) return c.json({ error: 'Folder not found' }, 404);
+
+  source.fileIds = source.fileIds.filter((id) => id !== fileId);
+  if (!target.fileIds.includes(fileId)) target.fileIds.push(fileId);
+  await writeFolders(c.env.HISTORY, folders);
+
+  const metaJson = await c.env.HISTORY.get(`meta:${fileId}`);
+  if (metaJson) {
+    try {
+      const meta = JSON.parse(metaJson);
+      meta.folderId = targetFolderId;
+      await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
+    } catch { /* ignore corrupt meta */ }
+  }
+
+  return c.json({ success: true });
+});
+
 // ── SPA fallback ────────────────────────────────────────────────────────────
 // Serve index.html for /<uuid> paths so direct links & browser refresh work.
 
