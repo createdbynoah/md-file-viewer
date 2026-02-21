@@ -115,16 +115,26 @@ const DELETE_MS = 60 * 24 * 60 * 60 * 1000;
 async function runRetention(env) {
   const now = Date.now();
   const allMeta = await listAllMeta(env.HISTORY);
+  const folders = await readFolders(env.HISTORY);
+  const folderIds = new Set(folders.map((f) => f.id));
   const deletedIds = [];
 
   for (const [id, meta] of allMeta) {
     const ref = meta.lastAccessedAt || meta.created;
     if (!ref) continue;
 
+    // Skip files in valid folders (exempt from retention)
+    if (meta.folderId && folderIds.has(meta.folderId)) continue;
+
+    // Clear stale folder references
+    if (meta.folderId && !folderIds.has(meta.folderId)) {
+      delete meta.folderId;
+      await env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+    }
+
     const age = now - new Date(ref).getTime();
 
     if (age >= DELETE_MS) {
-      // KV first (safe to retry), then R2 (idempotent)
       await env.HISTORY.delete(`meta:${id}`);
       await env.MD_FILES.delete(`${id}.md`);
       deletedIds.push(id);
@@ -134,7 +144,6 @@ async function runRetention(env) {
     }
   }
 
-  // Clean up history entries for deleted files in one batch
   if (deletedIds.length > 0) {
     const deleted = new Set(deletedIds);
     const history = await readHistory(env.HISTORY);
@@ -330,9 +339,17 @@ app.delete('/api/files/:id', async (c) => {
   await c.env.MD_FILES.delete(`${id}.md`);
   await c.env.HISTORY.delete(`meta:${id}`);
 
-  // Remove from history
   const history = await readHistory(c.env.HISTORY);
   await writeHistory(c.env.HISTORY, history.filter((h) => h.id !== id));
+
+  const folders = await readFolders(c.env.HISTORY);
+  let foldersChanged = false;
+  for (const folder of folders) {
+    const before = folder.fileIds.length;
+    folder.fileIds = folder.fileIds.filter((fid) => fid !== id);
+    if (folder.fileIds.length !== before) foldersChanged = true;
+  }
+  if (foldersChanged) await writeFolders(c.env.HISTORY, folders);
 
   return c.json({ success: true });
 });
