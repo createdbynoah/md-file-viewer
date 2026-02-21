@@ -39,11 +39,13 @@ const viewerArea = document.getElementById('viewer-area');
 const renderedOutput = document.getElementById('rendered-output');
 const backBtn = document.getElementById('back-btn');
 const deleteFileBtn = document.getElementById('delete-file-btn');
+const copyMdBtn = document.getElementById('copy-md-btn');
 const viewerTitle = document.getElementById('viewer-title');
 const hljsThemeLink = document.getElementById('hljs-theme');
 
 let currentFileId = null;
 let currentFileSource = null;
+let currentRawMarkdown = null;
 
 // ── Client-side routing ─────────────────────────────────────────────────────
 
@@ -249,10 +251,12 @@ async function viewFile(id, { updateUrl = true } = {}) {
     const res = await api(`/api/files/${encodeURIComponent(id)}`);
     if (!res.ok) return;
     const data = await res.json();
+    currentRawMarkdown = data.content;
     renderMarkdown(data.content, data.filename, id);
     currentFileId = id;
     currentFileSource = 'upload';
     deleteFileBtn.hidden = false;
+    copyMdBtn.hidden = false;
     if (updateUrl) pushUrl(`/${id}`);
     closeSidebar();
     loadHistory();
@@ -261,9 +265,26 @@ async function viewFile(id, { updateUrl = true } = {}) {
 
 function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
+  addCodeCopyButtons();
   viewerTitle.textContent = title || 'Markdown Viewer';
   inputArea.hidden = true;
   viewerArea.hidden = false;
+}
+
+function addCodeCopyButtons() {
+  for (const pre of renderedOutput.querySelectorAll('pre')) {
+    pre.style.position = 'relative';
+    const btn = document.createElement('button');
+    btn.className = 'code-copy-btn';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', () => {
+      const code = pre.querySelector('code');
+      navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+    pre.appendChild(btn);
+  }
 }
 
 function showInputArea({ updateUrl = true } = {}) {
@@ -272,10 +293,20 @@ function showInputArea({ updateUrl = true } = {}) {
   viewerTitle.textContent = 'Markdown Viewer';
   currentFileId = null;
   currentFileSource = null;
+  currentRawMarkdown = null;
+  copyMdBtn.hidden = true;
   if (updateUrl) pushUrl('/');
 }
 
 backBtn.addEventListener('click', showInputArea);
+
+copyMdBtn.addEventListener('click', () => {
+  if (!currentRawMarkdown) return;
+  navigator.clipboard.writeText(currentRawMarkdown);
+  const orig = copyMdBtn.textContent;
+  copyMdBtn.textContent = 'Copied!';
+  setTimeout(() => { copyMdBtn.textContent = orig; }, 1500);
+});
 
 deleteFileBtn.addEventListener('click', async () => {
   if (!currentFileId) return;

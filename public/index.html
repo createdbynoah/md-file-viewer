@@ -98,7 +98,10 @@
         <div id="viewer-area" class="viewer-area" hidden>
           <div class="viewer-toolbar">
             <button id="back-btn" class="text-btn">&larr; Back</button>
-            <button id="delete-file-btn" class="text-btn danger">Delete</button>
+            <div class="viewer-toolbar-right">
+              <button id="copy-md-btn" class="text-btn" hidden>Copy Markdown</button>
+              <button id="delete-file-btn" class="text-btn danger">Delete</button>
+            </div>
           </div>
           <article id="rendered-output" class="markdown-body"></article>
         </div>
