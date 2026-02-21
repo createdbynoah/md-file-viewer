@@ -44,6 +44,7 @@ All routes are prefixed with `/api/`. Auth-protected unless noted:
 | POST | `/api/paste` | Save pasted markdown (JSON body) |
 | GET | `/api/files` | List all files |
 | GET | `/api/files/:id` | Get file content |
+| PATCH  | `/api/files/:id` | Rename file |
 | DELETE | `/api/files/:id` | Delete file |
 | GET | `/api/history` | Get view history |
 | DELETE | `/api/history` | Clear all history |

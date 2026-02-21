@@ -213,6 +213,36 @@ app.get('/api/files/:id', async (c) => {
   return c.json({ id, filename: displayName, content });
 });
 
+// ── File rename ─────────────────────────────────────────────────────────────
+
+app.patch('/api/files/:id', async (c) => {
+  const id = c.req.param('id');
+  const { filename } = await c.req.json();
+
+  if (!filename || !filename.trim()) {
+    return c.json({ error: 'Filename is required' }, 400);
+  }
+
+  const trimmed = filename.trim();
+
+  const metaJson = await c.env.HISTORY.get(`meta:${id}`);
+  if (!metaJson) {
+    return c.json({ error: 'File not found' }, 404);
+  }
+
+  const meta = JSON.parse(metaJson);
+  meta.filename = trimmed;
+  await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+
+  const history = await readHistory(c.env.HISTORY);
+  const updated = history.map((h) =>
+    h.id === id ? { ...h, filename: trimmed } : h
+  );
+  await writeHistory(c.env.HISTORY, updated);
+
+  return c.json({ id, filename: trimmed });
+});
+
 // ── File delete ─────────────────────────────────────────────────────────────
 
 app.delete('/api/files/:id', async (c) => {
