@@ -337,14 +337,32 @@ viewerTitle.addEventListener('click', () => {
   input.className = 'topbar-title-input';
   input.value = previous;
 
+  const sizer = document.createElement('span');
+  sizer.className = 'topbar-title-input';
+  sizer.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+  document.body.appendChild(sizer);
+
+  function resizeInput() {
+    sizer.textContent = input.value || ' ';
+    input.style.width = sizer.scrollWidth + 2 + 'px';
+  }
+
   viewerTitle.replaceWith(input);
+  resizeInput();
   input.focus();
   input.select();
+
+  input.addEventListener('input', resizeInput);
+
+  function cleanup() {
+    sizer.remove();
+  }
 
   async function save() {
     const newName = input.value.trim();
     if (!newName || newName === previous) {
       input.replaceWith(viewerTitle);
+      cleanup();
       return;
     }
     try {
@@ -359,10 +377,12 @@ viewerTitle.addEventListener('click', () => {
       }
     } catch {}
     input.replaceWith(viewerTitle);
+    cleanup();
   }
 
   function cancel() {
     input.replaceWith(viewerTitle);
+    cleanup();
   }
 
   input.addEventListener('keydown', (e) => {
