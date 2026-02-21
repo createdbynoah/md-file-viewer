@@ -467,7 +467,10 @@ createFolderBtn.addEventListener('click', () => {
   folderList.prepend(li);
   input.focus();
 
+  let saving = false;
   async function save() {
+    if (saving) return;
+    saving = true;
     const name = input.value.trim();
     if (!name) {
       li.remove();
@@ -493,7 +496,10 @@ function startFolderRename(folder, nameEl) {
   input.focus();
   input.select();
 
+  let saving = false;
   async function save() {
+    if (saving) return;
+    saving = true;
     const newName = input.value.trim();
     if (!newName || newName === folder.name) {
       input.replaceWith(nameEl);
