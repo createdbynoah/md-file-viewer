@@ -360,11 +360,17 @@ app.get('/api/history', async (c) => {
   const history = await readHistory(c.env.HISTORY);
   const allMeta = await listAllMeta(c.env.HISTORY);
 
-  // Only show history entries for active (non-archived, non-deleted) files
-  return c.json(history.filter((h) => {
-    const meta = allMeta.get(h.id);
-    return meta && !meta.archivedAt;
-  }));
+  return c.json(
+    history
+      .filter((h) => {
+        const meta = allMeta.get(h.id);
+        return meta && !meta.archivedAt;
+      })
+      .map((h) => {
+        const meta = allMeta.get(h.id);
+        return { ...h, folderId: meta?.folderId || null };
+      }),
+  );
 });
 
 app.delete('/api/history', async (c) => {
