@@ -350,6 +350,233 @@ body {
   font-size: 0.8125rem;
 }
 
+/* ── Folders ─────────────────────────────────────────────────────────────── */
+
+.folder-list {
+  list-style: none;
+  padding: 0 8px 8px;
+}
+
+.folder-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 0.8125rem;
+}
+
+.folder-item {
+  margin-bottom: 2px;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text);
+  transition: background 0.15s;
+}
+
+.folder-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.folder-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+  width: 14px;
+  display: flex;
+  align-items: center;
+}
+
+.folder-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.folder-count {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.folder-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.folder-header:hover .folder-actions {
+  opacity: 1;
+}
+
+.folder-action-btn {
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 0.8125rem;
+  border-radius: 3px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.folder-action-btn:hover {
+  color: var(--text);
+  background: var(--border-light);
+}
+
+.folder-action-btn.danger:hover {
+  color: var(--danger);
+}
+
+.folder-files {
+  list-style: none;
+  padding: 0 0 0 24px;
+}
+
+.folder-file-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  transition: background 0.15s;
+}
+
+.folder-file-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
+}
+
+.folder-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-file-remove {
+  opacity: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+  flex-shrink: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.folder-file-item:hover .folder-file-remove {
+  opacity: 1;
+}
+
+.folder-file-remove:hover {
+  color: var(--danger);
+}
+
+.folder-inline-input {
+  width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
+.sidebar-add-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.history-folder-badge {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.history-folder-badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ── Folder dropdown (viewer toolbar) ────────────────────────────────────── */
+
+.folder-dropdown-wrapper {
+  position: relative;
+}
+
+.folder-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  padding: 4px;
+}
+
+.folder-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.folder-dropdown-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.folder-dropdown-item.active {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.folder-dropdown-sep {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
+}
+
+.folder-header.drag-over {
+  background: var(--accent-subtle);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
 /* ── Sidebar overlay (mobile) ────────────────────────────────────────────── */
 
 .sidebar-overlay {

@@ -69,6 +69,15 @@
       <!-- Sidebar -->
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-section">
+          <h2 class="sidebar-heading">Folders</h2>
+          <button id="create-folder-btn" class="icon-btn sidebar-add-btn" aria-label="Create folder" title="New folder">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+        </div>
+        <ul id="folder-list" class="folder-list"></ul>
+        <div class="sidebar-section">
           <h2 class="sidebar-heading">History</h2>
           <button id="clear-history-btn" class="text-btn">Clear</button>
         </div>
@@ -99,6 +108,10 @@
           <div class="viewer-toolbar">
             <button id="back-btn" class="text-btn">&larr; Back</button>
             <div class="viewer-toolbar-right">
+              <div class="folder-dropdown-wrapper">
+                <button id="folder-btn" class="text-btn" hidden>Move to Folder</button>
+                <div id="folder-dropdown" class="folder-dropdown" hidden></div>
+              </div>
               <button id="copy-md-btn" class="text-btn" hidden>Copy Markdown</button>
               <button id="delete-file-btn" class="text-btn danger">Delete</button>
             </div>
