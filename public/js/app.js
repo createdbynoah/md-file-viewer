@@ -46,6 +46,7 @@ const hljsThemeLink = document.getElementById('hljs-theme');
 let currentFileId = null;
 let currentFileSource = null;
 let currentRawMarkdown = null;
+let currentFilename = null;
 
 // ── Client-side routing ─────────────────────────────────────────────────────
 
@@ -272,6 +273,8 @@ function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
   addCodeCopyButtons();
   viewerTitle.textContent = title || 'Markdown Viewer';
+  currentFilename = title || 'Markdown Viewer';
+  viewerTitle.setAttribute('data-editable', id ? 'true' : 'false');
   inputArea.hidden = true;
   viewerArea.hidden = false;
 }
@@ -296,9 +299,11 @@ function showInputArea({ updateUrl = true } = {}) {
   inputArea.hidden = false;
   viewerArea.hidden = true;
   viewerTitle.textContent = 'Markdown Viewer';
+  viewerTitle.setAttribute('data-editable', 'false');
   currentFileId = null;
   currentFileSource = null;
   currentRawMarkdown = null;
+  currentFilename = null;
   copyMdBtn.hidden = true;
   if (updateUrl) pushUrl('/');
 }
@@ -319,6 +324,57 @@ deleteFileBtn.addEventListener('click', async () => {
   await api(`/api/files/${encodeURIComponent(currentFileId)}`, { method: 'DELETE' });
   showInputArea();
   loadHistory();
+});
+
+// ── Inline title rename ──────────────────────────────────────────────────
+
+viewerTitle.addEventListener('click', () => {
+  if (viewerTitle.getAttribute('data-editable') !== 'true' || !currentFileId) return;
+
+  const previous = currentFilename;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'topbar-title-input';
+  input.value = previous;
+
+  viewerTitle.replaceWith(input);
+  input.focus();
+  input.select();
+
+  async function save() {
+    const newName = input.value.trim();
+    if (!newName || newName === previous) {
+      input.replaceWith(viewerTitle);
+      return;
+    }
+    try {
+      const res = await api(`/api/files/${encodeURIComponent(currentFileId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ filename: newName }),
+      });
+      if (res.ok) {
+        currentFilename = newName;
+        viewerTitle.textContent = newName;
+        loadHistory();
+      }
+    } catch {}
+    input.replaceWith(viewerTitle);
+  }
+
+  function cancel() {
+    input.replaceWith(viewerTitle);
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      save();
+    } else if (e.key === 'Escape') {
+      cancel();
+    }
+  });
+
+  input.addEventListener('blur', save);
 });
 
 // ── Drop zone ───────────────────────────────────────────────────────────────
