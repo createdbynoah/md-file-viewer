@@ -62,6 +62,11 @@ function pushUrl(path) {
   }
 }
 
+function extractTitle(markdown) {
+  const match = markdown.match(/^#{1,6}\s+(.+)$/m);
+  return match ? match[1].trim() : null;
+}
+
 window.addEventListener('popstate', () => {
   const id = getFileIdFromPath();
   if (id) {
@@ -360,9 +365,10 @@ renderBtn.addEventListener('click', async () => {
   const content = pasteInput.value.trim();
   if (!content) return;
   try {
+    const title = extractTitle(content);
     const res = await api('/api/paste', {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, title }),
     });
     if (!res.ok) return;
     const data = await res.json();
