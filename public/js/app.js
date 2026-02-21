@@ -626,6 +626,7 @@ async function viewFile(id, { updateUrl = true } = {}) {
     if (updateUrl) pushUrl(`/${id}`);
     closeSidebar();
     loadHistory();
+    loadFolders();
   } catch {}
 }
 
@@ -686,6 +687,7 @@ deleteFileBtn.addEventListener('click', async () => {
   await api(`/api/files/${encodeURIComponent(currentFileId)}`, { method: 'DELETE' });
   showInputArea();
   loadHistory();
+  loadFolders();
 });
 
 // ── Inline title rename ──────────────────────────────────────────────────
@@ -736,6 +738,7 @@ viewerTitle.addEventListener('click', () => {
         currentFilename = newName;
         viewerTitle.textContent = newName;
         loadHistory();
+        loadFolders();
       }
     } catch {}
     input.replaceWith(viewerTitle);
