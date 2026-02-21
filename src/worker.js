@@ -351,7 +351,7 @@ app.get('*', async (c) => {
   const path = new URL(c.req.url).pathname;
   if (UUID_RE.test(path)) {
     const url = new URL(c.req.url);
-    url.pathname = '/index.html';
+    url.pathname = '/';
     return c.env.ASSETS.fetch(new Request(url, c.req.raw));
   }
   return c.notFound();

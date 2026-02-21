@@ -4,6 +4,7 @@
   "compatibility_date": "2025-02-20",
   "assets": {
     "directory": "public",
+    "binding": "ASSETS",
   },
   // R2 bucket for uploaded markdown files
   "r2_buckets": [
@@ -19,4 +20,8 @@
       "id": "4b5e3a41933d4e08b4e048d12d095a96",
     },
   ],
+  // Retention cron: archives after 30 days, deletes after 60 days of inactivity
+  "triggers": {
+    "crons": ["0 3 * * *"],
+  },
 }
