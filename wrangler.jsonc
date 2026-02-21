@@ -24,4 +24,15 @@
   "triggers": {
     "crons": ["0 3 * * *"],
   },
+  // Custom domain routing
+  "routes": [
+    {
+      "pattern": "notebook.noahcancode.com",
+      "custom_domain": true,
+    },
+  ],
+  // Built-in observability (Workers Logs)
+  "observability": {
+    "enabled": true,
+  },
 }
