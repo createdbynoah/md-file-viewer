@@ -242,6 +242,13 @@ function renderHistoryList(history) {
     const li = document.createElement('li');
     li.addEventListener('click', () => viewFile(entry.id));
 
+    li.draggable = true;
+    li.dataset.fileId = entry.id;
+    li.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', entry.id);
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
     const sourceTag = document.createElement('span');
     sourceTag.className = 'history-source';
     sourceTag.textContent = entry.source === 'paste' ? 'paste' : 'file';
@@ -371,6 +378,38 @@ function renderFolderList(folders) {
       renderFolderList(foldersData);
     });
 
+    header.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      header.classList.add('drag-over');
+    });
+
+    header.addEventListener('dragleave', () => {
+      header.classList.remove('drag-over');
+    });
+
+    header.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      header.classList.remove('drag-over');
+      const fileId = e.dataTransfer.getData('text/plain');
+      const sourceFolderId = e.dataTransfer.getData('application/x-source-folder');
+      if (!fileId) return;
+
+      if (sourceFolderId && sourceFolderId !== folder.id) {
+        await api('/api/folders/' + encodeURIComponent(sourceFolderId) + '/files/' + encodeURIComponent(fileId) + '/move', {
+          method: 'POST',
+          body: JSON.stringify({ targetFolderId: folder.id }),
+        });
+      } else if (!sourceFolderId) {
+        await api('/api/folders/' + encodeURIComponent(folder.id) + '/files', {
+          method: 'POST',
+          body: JSON.stringify({ fileId }),
+        });
+      }
+      loadFolders();
+      loadHistory();
+    });
+
     li.appendChild(header);
 
     if (isExpanded) {
@@ -381,6 +420,15 @@ function renderFolderList(folders) {
         const fileLi = document.createElement('li');
         fileLi.className = 'folder-file-item';
         fileLi.addEventListener('click', () => viewFile(file.id));
+
+        fileLi.draggable = true;
+        fileLi.dataset.fileId = file.id;
+        fileLi.dataset.sourceFolderId = folder.id;
+        fileLi.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('text/plain', file.id);
+          e.dataTransfer.setData('application/x-source-folder', folder.id);
+          e.dataTransfer.effectAllowed = 'move';
+        });
 
         const fileName = document.createElement('span');
         fileName.className = 'folder-file-name';
