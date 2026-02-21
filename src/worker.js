@@ -48,10 +48,78 @@ async function writeHistory(kv, history) {
 }
 
 async function addHistoryEntry(kv, entry) {
+  const now = new Date().toISOString();
   const history = await readHistory(kv);
   const filtered = history.filter((h) => h.id !== entry.id);
-  filtered.unshift({ ...entry, viewedAt: new Date().toISOString() });
-  await writeHistory(kv, filtered.slice(0, 100));
+  filtered.unshift({ ...entry, viewedAt: now });
+  // Update lastAccessedAt in metadata (authoritative timestamp for retention)
+  const metaKey = `meta:${entry.id}`;
+  const metaJson = await kv.get(metaKey);
+  if (metaJson) {
+    try {
+      const meta = JSON.parse(metaJson);
+      meta.lastAccessedAt = now;
+      delete meta.archivedAt;
+      await kv.put(metaKey, JSON.stringify(meta));
+    } catch { /* leave metadata unchanged on parse error */ }
+  }
+  await writeHistory(kv, filtered);
+}
+
+// ── KV metadata scan helper ─────────────────────────────────────────────────
+
+async function listAllMeta(kv) {
+  const result = new Map();
+  let cursor;
+  while (true) {
+    const list = await kv.list({ prefix: 'meta:', cursor });
+    for (const key of list.keys) {
+      const metaJson = await kv.get(key.name);
+      if (!metaJson) continue;
+      try {
+        result.set(key.name.slice(5), JSON.parse(metaJson));
+      } catch { /* skip corrupt */ }
+    }
+    if (list.list_complete) break;
+    cursor = list.cursor;
+  }
+  return result;
+}
+
+// ── Retention cron handler ──────────────────────────────────────────────────
+// Runs daily at 03:00 UTC. Archives after 30 days of inactivity, deletes after 60.
+
+const ARCHIVE_MS = 30 * 24 * 60 * 60 * 1000;
+const DELETE_MS = 60 * 24 * 60 * 60 * 1000;
+
+async function runRetention(env) {
+  const now = Date.now();
+  const allMeta = await listAllMeta(env.HISTORY);
+  const deletedIds = [];
+
+  for (const [id, meta] of allMeta) {
+    const ref = meta.lastAccessedAt || meta.created;
+    if (!ref) continue;
+
+    const age = now - new Date(ref).getTime();
+
+    if (age >= DELETE_MS) {
+      // KV first (safe to retry), then R2 (idempotent)
+      await env.HISTORY.delete(`meta:${id}`);
+      await env.MD_FILES.delete(`${id}.md`);
+      deletedIds.push(id);
+    } else if (age >= ARCHIVE_MS && !meta.archivedAt) {
+      meta.archivedAt = new Date().toISOString();
+      await env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+    }
+  }
+
+  // Clean up history entries for deleted files in one batch
+  if (deletedIds.length > 0) {
+    const deleted = new Set(deletedIds);
+    const history = await readHistory(env.HISTORY);
+    await writeHistory(env.HISTORY, history.filter((h) => !deleted.has(h.id)));
+  }
 }
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
@@ -114,13 +182,15 @@ app.post('/api/upload', async (c) => {
 
   const id = crypto.randomUUID();
   const content = await file.text();
+  const now = new Date().toISOString();
 
   await c.env.MD_FILES.put(`${id}.md`, content);
   await c.env.HISTORY.put(`meta:${id}`, JSON.stringify({
     filename: originalName,
     source: 'upload',
     size: content.length,
-    created: new Date().toISOString(),
+    created: now,
+    lastAccessedAt: now,
   }));
   await addHistoryEntry(c.env.HISTORY, { id, filename: originalName, source: 'upload' });
 
@@ -137,13 +207,15 @@ app.post('/api/paste', async (c) => {
 
   const id = crypto.randomUUID();
   const displayName = title || 'Pasted Markdown';
+  const now = new Date().toISOString();
 
   await c.env.MD_FILES.put(`${id}.md`, content);
   await c.env.HISTORY.put(`meta:${id}`, JSON.stringify({
     filename: displayName,
     source: 'paste',
     size: content.length,
-    created: new Date().toISOString(),
+    created: now,
+    lastAccessedAt: now,
   }));
   await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source: 'paste' });
 
@@ -153,32 +225,19 @@ app.post('/api/paste', async (c) => {
 // ── File listing ────────────────────────────────────────────────────────────
 
 app.get('/api/files', async (c) => {
+  const allMeta = await listAllMeta(c.env.HISTORY);
   const files = [];
 
-  // List all meta: keys from KV
-  let cursor = undefined;
-  let done = false;
-  while (!done) {
-    const list = await c.env.HISTORY.list({ prefix: 'meta:', cursor });
-    for (const key of list.keys) {
-      const id = key.name.slice(5); // strip "meta:"
-      const metaJson = await c.env.HISTORY.get(key.name);
-      if (metaJson) {
-        try {
-          const meta = JSON.parse(metaJson);
-          files.push({
-            id,
-            filename: meta.filename,
-            displayName: meta.filename,
-            source: meta.source,
-            size: meta.size,
-            modified: meta.created,
-          });
-        } catch { /* skip corrupt entries */ }
-      }
-    }
-    cursor = list.cursor;
-    done = list.list_complete;
+  for (const [id, meta] of allMeta) {
+    if (meta.archivedAt) continue;
+    files.push({
+      id,
+      filename: meta.filename,
+      displayName: meta.filename,
+      source: meta.source,
+      size: meta.size,
+      modified: meta.lastAccessedAt || meta.created,
+    });
   }
 
   return c.json(files);
@@ -262,7 +321,13 @@ app.delete('/api/files/:id', async (c) => {
 
 app.get('/api/history', async (c) => {
   const history = await readHistory(c.env.HISTORY);
-  return c.json(history);
+  const allMeta = await listAllMeta(c.env.HISTORY);
+
+  // Only show history entries for active (non-archived, non-deleted) files
+  return c.json(history.filter((h) => {
+    const meta = allMeta.get(h.id);
+    return meta && !meta.archivedAt;
+  }));
 });
 
 app.delete('/api/history', async (c) => {
@@ -292,4 +357,9 @@ app.get('*', async (c) => {
   return c.notFound();
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runRetention(env));
+  },
+};
