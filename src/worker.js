@@ -66,6 +66,26 @@ async function addHistoryEntry(kv, entry) {
   await writeHistory(kv, filtered);
 }
 
+// ── Folder helpers ──────────────────────────────────────────────────────────
+
+function generateFolderId() {
+  return 'f-' + crypto.randomUUID().slice(0, 8);
+}
+
+async function readFolders(kv) {
+  const data = await kv.get('folders');
+  if (!data) return [];
+  try {
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+}
+
+async function writeFolders(kv, folders) {
+  await kv.put('folders', JSON.stringify(folders));
+}
+
 // ── KV metadata scan helper ─────────────────────────────────────────────────
 
 async function listAllMeta(kv) {
