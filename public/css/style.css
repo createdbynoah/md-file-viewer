@@ -304,8 +304,10 @@ body {
   word-break: break-all;
 }
 
-.history-list li:hover {
-  background: var(--bg-tertiary);
+@media (hover: hover) {
+  .history-list li:hover {
+    background: var(--bg-tertiary);
+  }
 }
 
 .history-list li .history-source {
@@ -335,12 +337,20 @@ body {
   transition: opacity 0.15s, color 0.15s;
 }
 
-.history-list li:hover .history-remove {
-  opacity: 1;
+@media (hover: hover) {
+  .history-list li:hover .history-remove {
+    opacity: 1;
+  }
+
+  .history-list li .history-remove:hover {
+    color: var(--danger);
+  }
 }
 
-.history-list li .history-remove:hover {
-  color: var(--danger);
+@media (hover: none) {
+  .history-list li .history-remove {
+    opacity: 1;
+  }
 }
 
 .history-empty {
@@ -380,8 +390,10 @@ body {
   transition: background 0.15s;
 }
 
-.folder-header:hover {
-  background: var(--bg-tertiary);
+@media (hover: hover) {
+  .folder-header:hover {
+    background: var(--bg-tertiary);
+  }
 }
 
 .folder-chevron {
@@ -419,8 +431,16 @@ body {
   flex-shrink: 0;
 }
 
-.folder-header:hover .folder-actions {
-  opacity: 1;
+@media (hover: hover) {
+  .folder-header:hover .folder-actions {
+    opacity: 1;
+  }
+}
+
+@media (hover: none) {
+  .folder-actions {
+    opacity: 1;
+  }
 }
 
 .folder-action-btn {
@@ -434,13 +454,15 @@ body {
   transition: color 0.15s, background 0.15s;
 }
 
-.folder-action-btn:hover {
-  color: var(--text);
-  background: var(--border-light);
-}
+@media (hover: hover) {
+  .folder-action-btn:hover {
+    color: var(--text);
+    background: var(--border-light);
+  }
 
-.folder-action-btn.danger:hover {
-  color: var(--danger);
+  .folder-action-btn.danger:hover {
+    color: var(--danger);
+  }
 }
 
 .folder-files {
@@ -460,9 +482,11 @@ body {
   transition: background 0.15s;
 }
 
-.folder-file-item:hover {
-  background: var(--bg-tertiary);
-  color: var(--text);
+@media (hover: hover) {
+  .folder-file-item:hover {
+    background: var(--bg-tertiary);
+    color: var(--text);
+  }
 }
 
 .folder-file-name {
@@ -483,12 +507,20 @@ body {
   transition: opacity 0.15s, color 0.15s;
 }
 
-.folder-file-item:hover .folder-file-remove {
-  opacity: 1;
+@media (hover: hover) {
+  .folder-file-item:hover .folder-file-remove {
+    opacity: 1;
+  }
+
+  .folder-file-remove:hover {
+    color: var(--danger);
+  }
 }
 
-.folder-file-remove:hover {
-  color: var(--danger);
+@media (hover: none) {
+  .folder-file-remove {
+    opacity: 1;
+  }
 }
 
 .folder-inline-input {
@@ -556,8 +588,10 @@ body {
   transition: background 0.15s;
 }
 
-.folder-dropdown-item:hover {
-  background: var(--bg-tertiary);
+@media (hover: hover) {
+  .folder-dropdown-item:hover {
+    background: var(--bg-tertiary);
+  }
 }
 
 .folder-dropdown-item.active {
@@ -842,8 +876,16 @@ body {
   transition: opacity 0.15s, color 0.15s, background 0.15s;
 }
 
-.markdown-body pre:hover .code-copy-btn {
-  opacity: 1;
+@media (hover: hover) {
+  .markdown-body pre:hover .code-copy-btn {
+    opacity: 1;
+  }
+}
+
+@media (hover: none) {
+  .code-copy-btn {
+    opacity: 1;
+  }
 }
 
 .code-copy-btn:hover {
