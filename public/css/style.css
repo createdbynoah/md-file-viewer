@@ -188,6 +188,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .topbar-title {
@@ -941,8 +942,19 @@ body {
     display: block;
   }
 
+  .topbar-left {
+    flex-wrap: wrap;
+    gap: 0 8px;
+  }
+
   .topbar-title {
     max-width: 40vw;
+  }
+
+  .topbar-created {
+    width: 100%;
+    margin-left: 28px;
+    margin-top: -2px;
   }
 
   .input-area {
