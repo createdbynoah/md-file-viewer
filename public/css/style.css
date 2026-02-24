@@ -961,7 +961,7 @@ body {
   }
 
   .viewer-created {
-    order: 3;
+    order: -1;
     width: 100%;
     margin-left: 0;
     text-align: right;
