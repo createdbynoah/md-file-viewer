@@ -418,6 +418,8 @@ app.get('/api/history', async (c) => {
 
 app.delete('/api/history', async (c) => {
   await writeHistory(c.env.HISTORY, []);
+  const log = c.get('logger');
+  log.info('history.clear');
   return c.json({ success: true });
 });
 
@@ -425,6 +427,8 @@ app.delete('/api/history/:id', async (c) => {
   const id = c.req.param('id');
   const history = await readHistory(c.env.HISTORY);
   await writeHistory(c.env.HISTORY, history.filter((h) => h.id !== id));
+  const log = c.get('logger');
+  log.info('history.remove', { entryId: id });
   return c.json({ success: true });
 });
 
@@ -467,6 +471,9 @@ app.post('/api/folders', async (c) => {
   folders.push(folder);
   await writeFolders(c.env.HISTORY, folders);
 
+  const log = c.get('logger');
+  log.info('folder.create', { folderId: folder.id, name: folder.name });
+
   return c.json(folder, 201);
 });
 
@@ -505,6 +512,9 @@ app.delete('/api/folders/:id', async (c) => {
   }
 
   await writeFolders(c.env.HISTORY, folders.filter((f) => f.id !== id));
+
+  const log = c.get('logger');
+  log.info('folder.delete', { folderId: id, fileCount: folder.fileIds.length });
 
   return c.json({ success: true });
 });
