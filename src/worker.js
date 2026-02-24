@@ -176,6 +176,8 @@ app.use('/api/*', async (c, next) => {
   }
   const token = getCookie(c, 'auth');
   if (!(await verifySignedCookie(token, c.env.COOKIE_SECRET))) {
+    const log = c.get('logger');
+    log.warn('auth.unauthorized', { path });
     return c.json({ error: 'Unauthorized' }, 401);
   }
   return next();
@@ -186,6 +188,8 @@ app.use('/api/*', async (c, next) => {
 app.post('/api/auth/login', async (c) => {
   const { password } = await c.req.json();
   if (password !== c.env.ACCESS_PASSWORD) {
+    const log = c.get('logger');
+    log.warn('auth.failure', { reason: 'invalid_password' });
     return c.json({ error: 'Invalid password' }, 401);
   }
   const value = 'authenticated';
@@ -197,11 +201,15 @@ app.post('/api/auth/login', async (c) => {
     path: '/',
     maxAge: 60 * 60 * 24 * 30,
   });
+  const log = c.get('logger');
+  log.info('auth.login');
   return c.json({ success: true });
 });
 
 app.post('/api/auth/logout', (c) => {
   deleteCookie(c, 'auth', { path: '/' });
+  const log = c.get('logger');
+  log.info('auth.logout');
   return c.json({ success: true });
 });
 
