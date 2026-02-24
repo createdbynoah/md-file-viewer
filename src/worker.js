@@ -113,12 +113,13 @@ async function listAllMeta(kv) {
 const ARCHIVE_MS = 30 * 24 * 60 * 60 * 1000;
 const DELETE_MS = 60 * 24 * 60 * 60 * 1000;
 
-async function runRetention(env) {
+async function runRetention(env, log) {
   const now = Date.now();
   const allMeta = await listAllMeta(env.HISTORY);
   const folders = await readFolders(env.HISTORY);
   const folderIds = new Set(folders.map((f) => f.id));
   const deletedIds = [];
+  let archivedCount = 0;
 
   for (const [id, meta] of allMeta) {
     const ref = meta.lastAccessedAt || meta.created;
@@ -142,6 +143,7 @@ async function runRetention(env) {
     } else if (age >= ARCHIVE_MS && !meta.archivedAt) {
       meta.archivedAt = new Date().toISOString();
       await env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+      archivedCount++;
     }
   }
 
@@ -150,6 +152,8 @@ async function runRetention(env) {
     const history = await readHistory(env.HISTORY);
     await writeHistory(env.HISTORY, history.filter((h) => !deleted.has(h.id)));
   }
+
+  log.info('retention.run', { archived: archivedCount, deleted: deletedIds.length });
 }
 
 // ── Logging middleware ───────────────────────────────────────────────────
@@ -613,6 +617,11 @@ app.get('*', async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runRetention(env));
+    const log = createLogger(env.LOG_LEVEL);
+    ctx.waitUntil(
+      runRetention(env, log).catch((err) => {
+        log.error('retention.error', { error: err.message });
+      })
+    );
   },
 };
