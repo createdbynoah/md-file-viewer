@@ -964,6 +964,7 @@ body {
     order: 3;
     width: 100%;
     margin-left: 0;
+    text-align: right;
   }
 
   .markdown-body {
