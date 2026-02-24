@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { createLogger } from './logger.js';
 
 const app = new Hono();
 
@@ -150,6 +151,21 @@ async function runRetention(env) {
     await writeHistory(env.HISTORY, history.filter((h) => !deleted.has(h.id)));
   }
 }
+
+// ── Logging middleware ───────────────────────────────────────────────────
+
+app.use('/api/*', async (c, next) => {
+  const log = createLogger(c.env.LOG_LEVEL);
+  c.set('logger', log);
+  const start = Date.now();
+  await next();
+  const duration = Date.now() - start;
+  const status = c.res.status;
+  const method = c.req.method;
+  const path = new URL(c.req.url).pathname;
+  const lvl = status === 401 ? 'warn' : 'info';
+  log[lvl]('request', { method, path, status, duration });
+});
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 
