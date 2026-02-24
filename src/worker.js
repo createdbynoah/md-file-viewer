@@ -247,6 +247,9 @@ app.post('/api/upload', async (c) => {
   }));
   await addHistoryEntry(c.env.HISTORY, { id, filename: originalName, source: 'upload' });
 
+  const log = c.get('logger');
+  log.info('file.upload', { fileId: id, filename: originalName, size: content.length });
+
   return c.json({ id, filename: originalName });
 });
 
@@ -271,6 +274,9 @@ app.post('/api/paste', async (c) => {
     lastAccessedAt: now,
   }));
   await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source: 'paste' });
+
+  const log = c.get('logger');
+  log.info('file.paste', { fileId: id, filename: displayName, size: content.length });
 
   return c.json({ id, filename: displayName });
 });
@@ -303,6 +309,8 @@ app.get('/api/files/:id', async (c) => {
 
   const object = await c.env.MD_FILES.get(`${id}.md`);
   if (!object) {
+    const log = c.get('logger');
+    log.warn('file.notFound', { fileId: id });
     return c.json({ error: 'File not found' }, 404);
   }
 
@@ -322,6 +330,9 @@ app.get('/api/files/:id', async (c) => {
 
   await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source });
 
+  const log = c.get('logger');
+  log.debug('file.fetch', { fileId: id });
+
   return c.json({ id, filename: displayName, content });
 });
 
@@ -339,6 +350,8 @@ app.patch('/api/files/:id', async (c) => {
 
   const metaJson = await c.env.HISTORY.get(`meta:${id}`);
   if (!metaJson) {
+    const log = c.get('logger');
+    log.warn('file.notFound', { fileId: id });
     return c.json({ error: 'File not found' }, 404);
   }
 
@@ -351,6 +364,9 @@ app.patch('/api/files/:id', async (c) => {
     h.id === id ? { ...h, filename: trimmed } : h
   );
   await writeHistory(c.env.HISTORY, updated);
+
+  const log = c.get('logger');
+  log.info('file.rename', { fileId: id, filename: trimmed });
 
   return c.json({ id, filename: trimmed });
 });
@@ -374,6 +390,9 @@ app.delete('/api/files/:id', async (c) => {
     if (folder.fileIds.length !== before) foldersChanged = true;
   }
   if (foldersChanged) await writeFolders(c.env.HISTORY, folders);
+
+  const log = c.get('logger');
+  log.info('file.delete', { fileId: id });
 
   return c.json({ success: true });
 });
