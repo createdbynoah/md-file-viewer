@@ -188,7 +188,6 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
 }
 
 .topbar-title {
@@ -200,12 +199,6 @@ body {
   max-width: 50vw;
 }
 
-.topbar-created {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  margin-left: 4px;
-}
 
 .topbar-title[data-editable="true"] {
   cursor: text;
@@ -746,7 +739,8 @@ body {
 .viewer-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 0;
   padding: 8px 24px;
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
@@ -756,6 +750,14 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
+}
+
+.viewer-created {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  margin-left: auto;
 }
 
 /* ── Markdown body styling ───────────────────────────────────────────────── */
@@ -942,19 +944,8 @@ body {
     display: block;
   }
 
-  .topbar-left {
-    flex-wrap: wrap;
-    gap: 0 8px;
-  }
-
   .topbar-title {
     max-width: 40vw;
-  }
-
-  .topbar-created {
-    width: 100%;
-    margin-left: 28px;
-    margin-top: -2px;
   }
 
   .input-area {
@@ -967,6 +958,12 @@ body {
 
   .viewer-toolbar {
     padding: 8px 16px;
+  }
+
+  .viewer-created {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
   }
 
   .markdown-body {
