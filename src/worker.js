@@ -324,11 +324,13 @@ app.get('/api/files/:id', async (c) => {
   const metaJson = await c.env.HISTORY.get(`meta:${id}`);
   let displayName = `${id}.md`;
   let source = 'upload';
+  let created = null;
   if (metaJson) {
     try {
       const meta = JSON.parse(metaJson);
       displayName = meta.filename || displayName;
       source = meta.source || source;
+      created = meta.created || null;
     } catch { /* use defaults */ }
   }
 
@@ -337,7 +339,7 @@ app.get('/api/files/:id', async (c) => {
   const log = c.get('logger');
   log.debug('file.fetch', { fileId: id });
 
-  return c.json({ id, filename: displayName, content });
+  return c.json({ id, filename: displayName, content, created });
 });
 
 // ── File rename ─────────────────────────────────────────────────────────────
