@@ -46,6 +46,7 @@ const folderList = document.getElementById('folder-list');
 const createFolderBtn = document.getElementById('create-folder-btn');
 const folderBtn = document.getElementById('folder-btn');
 const folderDropdown = document.getElementById('folder-dropdown');
+const viewerCreated = document.getElementById('viewer-created');
 
 let foldersData = [];
 let currentFileId = null;
@@ -629,6 +630,13 @@ async function viewFile(id, { updateUrl = true } = {}) {
     deleteFileBtn.hidden = false;
     copyMdBtn.hidden = false;
     folderBtn.hidden = false;
+    if (data.created) {
+      const d = new Date(data.created);
+      viewerCreated.textContent = 'Created ' + d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) + ' at ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      viewerCreated.hidden = false;
+    } else {
+      viewerCreated.hidden = true;
+    }
     if (updateUrl) pushUrl(`/${id}`);
     closeSidebar();
     loadHistory();
@@ -674,6 +682,7 @@ function showInputArea({ updateUrl = true } = {}) {
   copyMdBtn.hidden = true;
   folderBtn.hidden = true;
   folderDropdown.hidden = true;
+  viewerCreated.hidden = true;
   if (updateUrl) pushUrl('/');
 }
 

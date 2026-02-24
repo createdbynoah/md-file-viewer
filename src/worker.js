@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { createLogger } from './logger.js';
 
 const app = new Hono();
 
@@ -112,12 +113,13 @@ async function listAllMeta(kv) {
 const ARCHIVE_MS = 30 * 24 * 60 * 60 * 1000;
 const DELETE_MS = 60 * 24 * 60 * 60 * 1000;
 
-async function runRetention(env) {
+async function runRetention(env, log) {
   const now = Date.now();
   const allMeta = await listAllMeta(env.HISTORY);
   const folders = await readFolders(env.HISTORY);
   const folderIds = new Set(folders.map((f) => f.id));
   const deletedIds = [];
+  let archivedCount = 0;
 
   for (const [id, meta] of allMeta) {
     const ref = meta.lastAccessedAt || meta.created;
@@ -141,6 +143,7 @@ async function runRetention(env) {
     } else if (age >= ARCHIVE_MS && !meta.archivedAt) {
       meta.archivedAt = new Date().toISOString();
       await env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+      archivedCount++;
     }
   }
 
@@ -149,7 +152,24 @@ async function runRetention(env) {
     const history = await readHistory(env.HISTORY);
     await writeHistory(env.HISTORY, history.filter((h) => !deleted.has(h.id)));
   }
+
+  log.info('retention.run', { archived: archivedCount, deleted: deletedIds.length });
 }
+
+// ── Logging middleware ───────────────────────────────────────────────────
+
+app.use('/api/*', async (c, next) => {
+  const log = createLogger(c.env.LOG_LEVEL);
+  c.set('logger', log);
+  const start = Date.now();
+  await next();
+  const duration = Date.now() - start;
+  const status = c.res.status;
+  const method = c.req.method;
+  const path = new URL(c.req.url).pathname;
+  const lvl = status === 401 ? 'warn' : 'info';
+  log[lvl]('request', { method, path, status, duration });
+});
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 
@@ -160,6 +180,8 @@ app.use('/api/*', async (c, next) => {
   }
   const token = getCookie(c, 'auth');
   if (!(await verifySignedCookie(token, c.env.COOKIE_SECRET))) {
+    const log = c.get('logger');
+    log.warn('auth.unauthorized', { path });
     return c.json({ error: 'Unauthorized' }, 401);
   }
   return next();
@@ -170,6 +192,8 @@ app.use('/api/*', async (c, next) => {
 app.post('/api/auth/login', async (c) => {
   const { password } = await c.req.json();
   if (password !== c.env.ACCESS_PASSWORD) {
+    const log = c.get('logger');
+    log.warn('auth.failure', { reason: 'invalid_password' });
     return c.json({ error: 'Invalid password' }, 401);
   }
   const value = 'authenticated';
@@ -181,11 +205,15 @@ app.post('/api/auth/login', async (c) => {
     path: '/',
     maxAge: 60 * 60 * 24 * 30,
   });
+  const log = c.get('logger');
+  log.info('auth.login');
   return c.json({ success: true });
 });
 
 app.post('/api/auth/logout', (c) => {
   deleteCookie(c, 'auth', { path: '/' });
+  const log = c.get('logger');
+  log.info('auth.logout');
   return c.json({ success: true });
 });
 
@@ -223,6 +251,9 @@ app.post('/api/upload', async (c) => {
   }));
   await addHistoryEntry(c.env.HISTORY, { id, filename: originalName, source: 'upload' });
 
+  const log = c.get('logger');
+  log.info('file.upload', { fileId: id, filename: originalName, size: content.length });
+
   return c.json({ id, filename: originalName });
 });
 
@@ -247,6 +278,9 @@ app.post('/api/paste', async (c) => {
     lastAccessedAt: now,
   }));
   await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source: 'paste' });
+
+  const log = c.get('logger');
+  log.info('file.paste', { fileId: id, filename: displayName, size: content.length });
 
   return c.json({ id, filename: displayName });
 });
@@ -279,6 +313,8 @@ app.get('/api/files/:id', async (c) => {
 
   const object = await c.env.MD_FILES.get(`${id}.md`);
   if (!object) {
+    const log = c.get('logger');
+    log.warn('file.notFound', { fileId: id });
     return c.json({ error: 'File not found' }, 404);
   }
 
@@ -288,17 +324,22 @@ app.get('/api/files/:id', async (c) => {
   const metaJson = await c.env.HISTORY.get(`meta:${id}`);
   let displayName = `${id}.md`;
   let source = 'upload';
+  let created = null;
   if (metaJson) {
     try {
       const meta = JSON.parse(metaJson);
       displayName = meta.filename || displayName;
       source = meta.source || source;
+      created = meta.created || null;
     } catch { /* use defaults */ }
   }
 
   await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source });
 
-  return c.json({ id, filename: displayName, content });
+  const log = c.get('logger');
+  log.debug('file.fetch', { fileId: id });
+
+  return c.json({ id, filename: displayName, content, created });
 });
 
 // ── File rename ─────────────────────────────────────────────────────────────
@@ -315,6 +356,8 @@ app.patch('/api/files/:id', async (c) => {
 
   const metaJson = await c.env.HISTORY.get(`meta:${id}`);
   if (!metaJson) {
+    const log = c.get('logger');
+    log.warn('file.notFound', { fileId: id });
     return c.json({ error: 'File not found' }, 404);
   }
 
@@ -327,6 +370,9 @@ app.patch('/api/files/:id', async (c) => {
     h.id === id ? { ...h, filename: trimmed } : h
   );
   await writeHistory(c.env.HISTORY, updated);
+
+  const log = c.get('logger');
+  log.info('file.rename', { fileId: id, filename: trimmed });
 
   return c.json({ id, filename: trimmed });
 });
@@ -350,6 +396,9 @@ app.delete('/api/files/:id', async (c) => {
     if (folder.fileIds.length !== before) foldersChanged = true;
   }
   if (foldersChanged) await writeFolders(c.env.HISTORY, folders);
+
+  const log = c.get('logger');
+  log.info('file.delete', { fileId: id });
 
   return c.json({ success: true });
 });
@@ -375,6 +424,8 @@ app.get('/api/history', async (c) => {
 
 app.delete('/api/history', async (c) => {
   await writeHistory(c.env.HISTORY, []);
+  const log = c.get('logger');
+  log.info('history.clear');
   return c.json({ success: true });
 });
 
@@ -382,6 +433,8 @@ app.delete('/api/history/:id', async (c) => {
   const id = c.req.param('id');
   const history = await readHistory(c.env.HISTORY);
   await writeHistory(c.env.HISTORY, history.filter((h) => h.id !== id));
+  const log = c.get('logger');
+  log.info('history.remove', { entryId: id });
   return c.json({ success: true });
 });
 
@@ -424,6 +477,9 @@ app.post('/api/folders', async (c) => {
   folders.push(folder);
   await writeFolders(c.env.HISTORY, folders);
 
+  const log = c.get('logger');
+  log.info('folder.create', { folderId: folder.id, name: folder.name });
+
   return c.json(folder, 201);
 });
 
@@ -462,6 +518,9 @@ app.delete('/api/folders/:id', async (c) => {
   }
 
   await writeFolders(c.env.HISTORY, folders.filter((f) => f.id !== id));
+
+  const log = c.get('logger');
+  log.info('folder.delete', { folderId: id, fileCount: folder.fileIds.length });
 
   return c.json({ success: true });
 });
@@ -560,6 +619,11 @@ app.get('*', async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runRetention(env));
+    const log = createLogger(env.LOG_LEVEL);
+    ctx.waitUntil(
+      runRetention(env, log).catch((err) => {
+        log.error('retention.error', { error: err.message });
+      })
+    );
   },
 };

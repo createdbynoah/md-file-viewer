@@ -31,6 +31,10 @@
       "custom_domain": true,
     },
   ],
+  // Default log level for structured logger (override in .dev.vars for local dev)
+  "vars": {
+    "LOG_LEVEL": "info",
+  },
   // Built-in observability (Workers Logs)
   "observability": {
     "enabled": true,
