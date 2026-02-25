@@ -656,7 +656,11 @@ function renderMarkdown(content, title, id) {
 
 function addCodeCopyButtons() {
   for (const pre of renderedOutput.querySelectorAll('pre')) {
-    pre.style.position = 'relative';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pre-wrapper';
+    pre.parentNode.insertBefore(wrapper, pre);
+    wrapper.appendChild(pre);
+
     const btn = document.createElement('button');
     btn.className = 'code-copy-btn';
     btn.textContent = 'Copy';
@@ -666,7 +670,7 @@ function addCodeCopyButtons() {
       btn.textContent = 'Copied!';
       setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
     });
-    pre.appendChild(btn);
+    wrapper.appendChild(btn);
   }
 }
 
