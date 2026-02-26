@@ -785,6 +785,11 @@ body {
   margin-left: auto;
 }
 
+.viewer-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
 .viewer-created {
   font-size: 0.75rem;
   color: var(--text-tertiary);
@@ -795,12 +800,8 @@ body {
 /* ── Markdown body styling ───────────────────────────────────────────────── */
 
 .markdown-body {
-  padding: 32px 24px;
-  max-width: 860px;
-  margin: 0 auto;
+  padding: 32px max(24px, calc((100% - 860px) / 2));
   width: 100%;
-  overflow-y: auto;
-  flex: 1;
   line-height: 1.7;
   font-size: 1rem;
 }
@@ -853,8 +854,13 @@ body {
   font-family: "SF Mono", "Cascadia Mono", "Fira Code", monospace;
 }
 
-.markdown-body pre {
+.pre-wrapper {
+  position: relative;
   margin-bottom: 1em;
+}
+
+.markdown-body pre {
+  margin-bottom: 0;
   border-radius: var(--radius);
   overflow-x: auto;
   background: var(--code-bg);
@@ -885,7 +891,7 @@ body {
 }
 
 @media (hover: hover) {
-  .markdown-body pre:hover .code-copy-btn {
+  .pre-wrapper:hover .code-copy-btn {
     opacity: 1;
   }
 }
