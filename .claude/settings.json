@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$CLAUDE_TOOL_INPUT\" | jq -r '.file_path // .content_path // empty'); if [ -z \"$FILE\" ]; then exit 0; fi; case \"$FILE\" in *.js|*.css|*.html|*.json|*.md) cd \"$CLAUDE_PROJECT_DIR\" && npx prettier --write \"$FILE\" 2>/dev/null; exit 0 ;; *) exit 0 ;; esac",
+            "statusMessage": "Formatting with Prettier"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CMD=$(echo \"$CLAUDE_TOOL_INPUT\" | jq -r '.command // empty'); case \"$CMD\" in *'wrangler deploy'*|*'pnpm run deploy'*|*'pnpm deploy'*) echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"reason\":\"Blocked: production deployment. Use GitHub Actions (push to main) to deploy to notebook.noahcancode.com.\"}}'; exit 0 ;; *'--force'*main*|*main*'--force'*|*'push --force'*|*'push -f '*) echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"reason\":\"Blocked: force push to main/remote. This can destroy deployment history.\"}}'; exit 0 ;; *'wrangler d1'*'--remote'*|*'wrangler kv'*'--remote'*|*'wrangler r2'*'--remote'*) echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"reason\":\"Blocked: remote operation on production Cloudflare resources (R2/KV/D1). Use local dev bindings instead.\"}}'; exit 0 ;; *'wrangler secret'*) echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"reason\":\"Blocked: modifying production secrets (ACCESS_PASSWORD, COOKIE_SECRET). Manage secrets through the Cloudflare dashboard.\"}}'; exit 0 ;; *'rm -rf '*|*'rm -rf.'*) echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"reason\":\"Blocked: recursive force delete. Too dangerous — be specific about what to remove.\"}}'; exit 0 ;; esac; exit 0"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[Post-compaction reminders] Package manager: pnpm (never npm/yarn). Architecture: Hono backend in src/worker.js, vanilla JS SPA in public/ (no bundler, no build step). Storage: R2 (MD_FILES) for file content, KV (HISTORY) for metadata/history. Auth: HMAC-SHA256 cookies via Web Crypto. Routing: server catch-all for /<uuid> SPA fallback, client pushState. Deployment: GitHub Actions on push to main only — never deploy manually. CSS theming via data-theme attribute + custom properties. Max 100 history entries in single KV value.\""
+          }
+        ]
+      }
+    ]
+  }
+}
