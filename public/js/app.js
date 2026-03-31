@@ -1,3 +1,26 @@
+// ── Client logger ───────────────────────────────────────────────────────────
+
+const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
+
+function createLogger(level) {
+  const threshold = LOG_LEVELS[(level || 'info').toLowerCase()] ?? LOG_LEVELS.info;
+
+  function emit(lvl, msg, ctx) {
+    if (LOG_LEVELS[lvl] < threshold) return;
+    const entry = { level: lvl, msg, ...ctx, ts: new Date().toISOString() };
+    console[lvl](JSON.stringify(entry));
+  }
+
+  return {
+    debug: (msg, ctx) => emit('debug', msg, ctx),
+    info: (msg, ctx) => emit('info', msg, ctx),
+    warn: (msg, ctx) => emit('warn', msg, ctx),
+    error: (msg, ctx) => emit('error', msg, ctx),
+  };
+}
+
+const log = createLogger('debug');
+
 // ── Markdown-it setup ───────────────────────────────────────────────────────
 
 const md = window.markdownit({
@@ -53,6 +76,140 @@ let currentFileId = null;
 let currentFileSource = null;
 let currentRawMarkdown = null;
 let currentFilename = null;
+
+// ── Sidebar polling ─────────────────────────────────────────────────────────
+
+const POLL_ACTIVE_MS = 5000;
+const POLL_IDLE_MS = 30000;
+const POLL_MAX_BACKOFF_MS = 60000;
+const IDLE_THRESHOLD_MS = 120000;
+
+let pollTimer = null;
+let lastHistoryHash = null;
+let lastFoldersHash = null;
+let pollInFlight = false;
+let consecutiveErrors = 0;
+let lastActivity = Date.now();
+let isIdle = false;
+
+function resetActivity() {
+  lastActivity = Date.now();
+  if (isIdle) {
+    isIdle = false;
+    log.debug('poll: user activity detected, resuming active polling');
+    restartPollTimer();
+  }
+}
+
+for (const evt of ['pointerdown', 'keydown', 'scroll']) {
+  document.addEventListener(evt, resetActivity, { passive: true });
+}
+
+function getPollDelay() {
+  if (consecutiveErrors > 0) {
+    return Math.min(POLL_ACTIVE_MS * 2 ** consecutiveErrors, POLL_MAX_BACKOFF_MS);
+  }
+  return isIdle ? POLL_IDLE_MS : POLL_ACTIVE_MS;
+}
+
+function schedulePoll() {
+  const delay = getPollDelay();
+  log.debug('poll: next in ' + delay + 'ms', { idle: isIdle, errors: consecutiveErrors });
+  pollTimer = setTimeout(pollSidebar, delay);
+}
+
+function restartPollTimer() {
+  if (pollTimer) clearTimeout(pollTimer);
+  schedulePoll();
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  log.info('poll: started');
+  consecutiveErrors = 0;
+  lastActivity = Date.now();
+  isIdle = false;
+  schedulePoll();
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  pollInFlight = false;
+  consecutiveErrors = 0;
+  log.info('poll: stopped');
+}
+
+async function pollSidebar() {
+  pollTimer = null;
+
+  if (document.hidden) {
+    log.debug('poll: skipped, tab hidden');
+    schedulePoll();
+    return;
+  }
+
+  if (pollInFlight) {
+    log.debug('poll: skipped, request in flight');
+    schedulePoll();
+    return;
+  }
+
+  if (!isIdle && Date.now() - lastActivity > IDLE_THRESHOLD_MS) {
+    isIdle = true;
+    log.info('poll: entering idle mode', { inactiveMs: Date.now() - lastActivity });
+  }
+
+  pollInFlight = true;
+  try {
+    const [historyRes, foldersRes] = await Promise.all([
+      api('/api/history'),
+      api('/api/folders'),
+    ]);
+    const history = await historyRes.json();
+    const folders = await foldersRes.json();
+
+    if (consecutiveErrors > 0) {
+      log.info('poll: recovered after errors', { previousErrors: consecutiveErrors });
+    }
+    consecutiveErrors = 0;
+
+    const historyHash = JSON.stringify(history);
+    const foldersHash = JSON.stringify(folders);
+
+    const historyChanged = historyHash !== lastHistoryHash;
+    const foldersChanged = foldersHash !== lastFoldersHash;
+
+    if (historyChanged) {
+      lastHistoryHash = historyHash;
+      renderHistoryList(history);
+    }
+    if (foldersChanged) {
+      lastFoldersHash = foldersHash;
+      foldersData = folders;
+      renderFolderList(folders);
+    }
+    if (historyChanged || foldersChanged) {
+      log.info('poll: sidebar updated', { historyChanged, foldersChanged });
+    }
+  } catch (err) {
+    consecutiveErrors++;
+    log.error('poll: fetch failed', { error: err.message, consecutiveErrors });
+  } finally {
+    pollInFlight = false;
+    schedulePoll();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && pollTimer) {
+    log.debug('poll: tab visible, polling immediately');
+    restartPollTimer();
+    pollSidebar();
+  }
+});
 
 // ── Client-side routing ─────────────────────────────────────────────────────
 
@@ -116,6 +273,7 @@ async function checkAuth() {
 function showLogin() {
   loginScreen.hidden = false;
   appScreen.hidden = true;
+  stopPolling();
 }
 
 function showApp() {
@@ -123,6 +281,7 @@ function showApp() {
   appScreen.hidden = false;
   loadFolders();
   loadHistory();
+  startPolling();
   const deepLinkId = getFileIdFromPath();
   if (deepLinkId) {
     viewFile(deepLinkId, { updateUrl: false });
@@ -212,6 +371,7 @@ async function loadHistory() {
   try {
     const res = await api('/api/history');
     const history = await res.json();
+    lastHistoryHash = JSON.stringify(history);
     renderHistoryList(history);
   } catch {}
 }
@@ -294,6 +454,7 @@ async function loadFolders() {
   try {
     const res = await api('/api/folders');
     foldersData = await res.json();
+    lastFoldersHash = JSON.stringify(foldersData);
     renderFolderList(foldersData);
   } catch {}
 }
