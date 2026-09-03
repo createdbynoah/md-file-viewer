@@ -107,6 +107,22 @@ async function listAllMeta(kv) {
   return result;
 }
 
+// Direct per-id metadata lookup. Unlike listAllMeta(), this does not depend on
+// kv.list(), which is eventually consistent and can lag behind a fresh write.
+// Used by the sidebar routes so a newly created note appears immediately.
+async function getMetaMany(kv, ids) {
+  const unique = [...new Set(ids)];
+  const values = await Promise.all(unique.map((id) => kv.get(`meta:${id}`)));
+  const result = new Map();
+  unique.forEach((id, i) => {
+    if (!values[i]) return;
+    try {
+      result.set(id, JSON.parse(values[i]));
+    } catch { /* skip corrupt */ }
+  });
+  return result;
+}
+
 // ── Retention cron handler ──────────────────────────────────────────────────
 // Runs daily at 03:00 UTC. Archives after 30 days of inactivity, deletes after 60.
 
@@ -407,7 +423,7 @@ app.delete('/api/files/:id', async (c) => {
 
 app.get('/api/history', async (c) => {
   const history = await readHistory(c.env.HISTORY);
-  const allMeta = await listAllMeta(c.env.HISTORY);
+  const allMeta = await getMetaMany(c.env.HISTORY, history.map((h) => h.id));
 
   return c.json(
     history
@@ -442,7 +458,7 @@ app.delete('/api/history/:id', async (c) => {
 
 app.get('/api/folders', async (c) => {
   const folders = await readFolders(c.env.HISTORY);
-  const allMeta = await listAllMeta(c.env.HISTORY);
+  const allMeta = await getMetaMany(c.env.HISTORY, folders.flatMap((f) => f.fileIds));
 
   const enriched = folders.map((folder) => ({
     id: folder.id,

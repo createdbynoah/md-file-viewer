@@ -70,6 +70,8 @@ const createFolderBtn = document.getElementById('create-folder-btn');
 const folderBtn = document.getElementById('folder-btn');
 const folderDropdown = document.getElementById('folder-dropdown');
 const viewerCreated = document.getElementById('viewer-created');
+const topbar = document.querySelector('.topbar');
+const viewerScroll = document.querySelector('.viewer-scroll');
 
 let foldersData = [];
 let currentFileId = null;
@@ -88,6 +90,7 @@ let pollTimer = null;
 let lastHistoryHash = null;
 let lastFoldersHash = null;
 let pollInFlight = false;
+let sidebarFetchSeq = 0;
 let consecutiveErrors = 0;
 let lastActivity = Date.now();
 let isIdle = false;
@@ -164,36 +167,11 @@ async function pollSidebar() {
 
   pollInFlight = true;
   try {
-    const [historyRes, foldersRes] = await Promise.all([
-      api('/api/history'),
-      api('/api/folders'),
-    ]);
-    const history = await historyRes.json();
-    const folders = await foldersRes.json();
-
-    if (consecutiveErrors > 0) {
+    const result = await refreshSidebar('poll');
+    if (result && consecutiveErrors > 0) {
       log.info('poll: recovered after errors', { previousErrors: consecutiveErrors });
     }
-    consecutiveErrors = 0;
-
-    const historyHash = JSON.stringify(history);
-    const foldersHash = JSON.stringify(folders);
-
-    const historyChanged = historyHash !== lastHistoryHash;
-    const foldersChanged = foldersHash !== lastFoldersHash;
-
-    if (historyChanged) {
-      lastHistoryHash = historyHash;
-      renderHistoryList(history);
-    }
-    if (foldersChanged) {
-      lastFoldersHash = foldersHash;
-      foldersData = folders;
-      renderFolderList(folders);
-    }
-    if (historyChanged || foldersChanged) {
-      log.info('poll: sidebar updated', { historyChanged, foldersChanged });
-    }
+    if (result) consecutiveErrors = 0;
   } catch (err) {
     consecutiveErrors++;
     log.error('poll: fetch failed', { error: err.message, consecutiveErrors });
@@ -201,6 +179,60 @@ async function pollSidebar() {
     pollInFlight = false;
     schedulePoll();
   }
+}
+
+// ── Sidebar data (single source of truth for history + folders) ─────────────
+
+// Fetches history and folders together and re-renders whatever changed.
+// Every sidebar refresh goes through here (polling, user actions, file views)
+// so there is exactly one code path that updates the sidebar. A sequence
+// counter drops responses that were overtaken by a newer request, which
+// prevents a slow poll from clobbering fresh data with stale data.
+// Returns null when the response was discarded as stale.
+async function refreshSidebar(reason) {
+  const seq = ++sidebarFetchSeq;
+  const [historyRes, foldersRes] = await Promise.all([
+    api('/api/history'),
+    api('/api/folders'),
+  ]);
+  const history = await historyRes.json();
+  const folders = await foldersRes.json();
+
+  if (seq !== sidebarFetchSeq) {
+    log.debug('sidebar: discarded stale response', { reason });
+    return null;
+  }
+
+  return applySidebarData(history, folders, reason);
+}
+
+function applySidebarData(history, folders, reason) {
+  const historyHash = JSON.stringify(history);
+  const foldersHash = JSON.stringify(folders);
+
+  const historyChanged = historyHash !== lastHistoryHash;
+  const foldersChanged = foldersHash !== lastFoldersHash;
+
+  if (historyChanged) {
+    lastHistoryHash = historyHash;
+    renderHistoryList(history);
+  }
+  if (foldersChanged) {
+    lastFoldersHash = foldersHash;
+    foldersData = folders;
+    renderFolderList(folders);
+  }
+  if (historyChanged || foldersChanged) {
+    log.info('sidebar: updated', { reason, historyChanged, foldersChanged });
+  }
+  return { historyChanged, foldersChanged };
+}
+
+// Fire-and-forget wrapper for user-triggered refreshes.
+function syncSidebar(reason) {
+  refreshSidebar(reason).catch((err) => {
+    log.warn('sidebar: refresh failed', { reason, error: err.message });
+  });
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -279,8 +311,7 @@ function showLogin() {
 function showApp() {
   loginScreen.hidden = true;
   appScreen.hidden = false;
-  loadFolders();
-  loadHistory();
+  syncSidebar('init');
   startPolling();
   const deepLinkId = getFileIdFromPath();
   if (deepLinkId) {
@@ -367,15 +398,6 @@ sidebarOverlay.addEventListener('click', closeSidebar);
 
 // ── History ─────────────────────────────────────────────────────────────────
 
-async function loadHistory() {
-  try {
-    const res = await api('/api/history');
-    const history = await res.json();
-    lastHistoryHash = JSON.stringify(history);
-    renderHistoryList(history);
-  } catch {}
-}
-
 function createFolderBadgeSvg() {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -425,7 +447,7 @@ function renderHistoryList(history) {
     removeBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       await api('/api/history/' + encodeURIComponent(entry.id), { method: 'DELETE' });
-      loadHistory();
+      syncSidebar('history-remove');
     });
 
     li.append(sourceTag, name);
@@ -445,19 +467,10 @@ function renderHistoryList(history) {
 
 clearHistoryBtn.addEventListener('click', async () => {
   await api('/api/history', { method: 'DELETE' });
-  loadHistory();
+  syncSidebar('history-clear');
 });
 
 // ── Folders ──────────────────────────────────────────────────────────────────
-
-async function loadFolders() {
-  try {
-    const res = await api('/api/folders');
-    foldersData = await res.json();
-    lastFoldersHash = JSON.stringify(foldersData);
-    renderFolderList(foldersData);
-  } catch {}
-}
 
 function createChevronSvg() {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -568,8 +581,7 @@ function renderFolderList(folders) {
           body: JSON.stringify({ fileId }),
         });
       }
-      loadFolders();
-      loadHistory();
+      syncSidebar('folder-drop');
     });
 
     li.appendChild(header);
@@ -603,7 +615,7 @@ function renderFolderList(folders) {
         removeBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           await api('/api/folders/' + encodeURIComponent(folder.id) + '/files/' + encodeURIComponent(file.id), { method: 'DELETE' });
-          loadFolders();
+          syncSidebar('folder-file-remove');
         });
 
         fileLi.append(fileName, removeBtn);
@@ -639,7 +651,7 @@ createFolderBtn.addEventListener('click', () => {
       return;
     }
     await api('/api/folders', { method: 'POST', body: JSON.stringify({ name }) });
-    loadFolders();
+    syncSidebar('folder-create');
   }
 
   input.addEventListener('keydown', (e) => {
@@ -671,7 +683,7 @@ function startFolderRename(folder, nameEl) {
       method: 'PATCH',
       body: JSON.stringify({ name: newName }),
     });
-    loadFolders();
+    syncSidebar('folder-rename');
   }
 
   input.addEventListener('keydown', (e) => {
@@ -684,8 +696,7 @@ function startFolderRename(folder, nameEl) {
 async function deleteFolder(folder) {
   if (!confirm('Delete "' + folder.name + '" and ' + folder.files.length + ' file(s)?')) return;
   await api('/api/folders/' + encodeURIComponent(folder.id), { method: 'DELETE' });
-  loadFolders();
-  loadHistory();
+  syncSidebar('folder-delete');
 }
 
 // ── Viewer folder button ────────────────────────────────────────────────────
@@ -716,8 +727,7 @@ function renderFolderDropdown() {
     removeOpt.addEventListener('click', async () => {
       await api('/api/folders/' + encodeURIComponent(currentFolderId) + '/files/' + encodeURIComponent(currentFileId), { method: 'DELETE' });
       folderDropdown.hidden = true;
-      loadFolders();
-      loadHistory();
+      syncSidebar('folder-unassign');
     });
     folderDropdown.appendChild(removeOpt);
 
@@ -738,8 +748,7 @@ function renderFolderDropdown() {
         body: JSON.stringify({ fileId: currentFileId }),
       });
       folderDropdown.hidden = true;
-      loadFolders();
-      loadHistory();
+      syncSidebar('folder-assign');
     });
     folderDropdown.appendChild(opt);
   }
@@ -762,8 +771,7 @@ function renderFolderDropdown() {
         body: JSON.stringify({ fileId: currentFileId }),
       });
       folderDropdown.hidden = true;
-      loadFolders();
-      loadHistory();
+      syncSidebar('folder-create-assign');
     }
   });
   folderDropdown.appendChild(newFolderOpt);
@@ -800,14 +808,17 @@ async function viewFile(id, { updateUrl = true } = {}) {
     }
     if (updateUrl) pushUrl(`/${id}`);
     closeSidebar();
-    loadHistory();
-    loadFolders();
+    // The server just recorded this view in history, so refresh now rather
+    // than waiting for the next poll.
+    syncSidebar('view-file');
   } catch {}
 }
 
 function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
   addCodeCopyButtons();
+  viewerScroll.scrollTop = 0;
+  updateTopbarOffset();
   viewerTitle.textContent = title || 'Markdown Viewer';
   currentFilename = title || 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', id ? 'true' : 'false');
@@ -838,6 +849,8 @@ function addCodeCopyButtons() {
 function showInputArea({ updateUrl = true } = {}) {
   inputArea.hidden = false;
   viewerArea.hidden = true;
+  viewerScroll.scrollTop = 0;
+  updateTopbarOffset();
   viewerTitle.textContent = 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', 'false');
   currentFileId = null;
@@ -853,6 +866,23 @@ function showInputArea({ updateUrl = true } = {}) {
 
 backBtn.addEventListener('click', showInputArea);
 
+// ── Header scroll-away ──────────────────────────────────────────────────────
+// While reading a note the topbar scrolls out of view together with the
+// content: the offset tracks the viewer's scrollTop, capped at the topbar
+// height, and returns to zero as the user scrolls back to the top.
+
+let topbarOffset = 0;
+
+function updateTopbarOffset() {
+  const maxOffset = topbar.offsetHeight;
+  const offset = viewerArea.hidden ? 0 : Math.min(viewerScroll.scrollTop, maxOffset);
+  if (offset === topbarOffset) return;
+  topbarOffset = offset;
+  appScreen.style.setProperty('--topbar-offset', offset + 'px');
+}
+
+viewerScroll.addEventListener('scroll', updateTopbarOffset, { passive: true });
+
 copyMdBtn.addEventListener('click', () => {
   if (!currentRawMarkdown) return;
   navigator.clipboard.writeText(currentRawMarkdown);
@@ -866,8 +896,7 @@ deleteFileBtn.addEventListener('click', async () => {
   if (!confirm('Delete this file?')) return;
   await api(`/api/files/${encodeURIComponent(currentFileId)}`, { method: 'DELETE' });
   showInputArea();
-  loadHistory();
-  loadFolders();
+  syncSidebar('file-delete');
 });
 
 // ── Inline title rename ──────────────────────────────────────────────────
@@ -917,8 +946,7 @@ viewerTitle.addEventListener('click', () => {
       if (res.ok) {
         currentFilename = newName;
         viewerTitle.textContent = newName;
-        loadHistory();
-        loadFolders();
+        syncSidebar('file-rename');
       }
     } catch {}
     input.replaceWith(viewerTitle);
