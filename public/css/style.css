@@ -354,6 +354,27 @@ body {
   }
 }
 
+.history-list li.history-group-heading {
+  padding: 14px 10px 4px;
+  cursor: default;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  word-break: normal;
+}
+
+.history-list li.history-group-heading:first-child {
+  padding-top: 4px;
+}
+
+@media (hover: hover) {
+  .history-list li.history-group-heading:hover {
+    background: none;
+  }
+}
+
 .history-empty {
   padding: 24px 16px;
   text-align: center;
@@ -763,6 +784,7 @@ body {
 
 .viewer-area {
   flex: 1;
+  min-width: 0; /* prevent wide content from growing the flex item */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -788,6 +810,7 @@ body {
 .viewer-scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden; /* page never scrolls horizontally; wide elements scroll themselves */
 }
 
 .viewer-created {
@@ -802,6 +825,9 @@ body {
 .markdown-body {
   padding: 32px max(24px, calc((100% - 860px) / 2));
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
   line-height: 1.7;
   font-size: 1rem;
 }
@@ -857,6 +883,7 @@ body {
 .pre-wrapper {
   position: relative;
   margin-bottom: 1em;
+  max-width: 100%;
 }
 
 .markdown-body pre {
@@ -907,10 +934,20 @@ body {
   color: var(--text);
 }
 
+.table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: 1em;
+}
+
 .markdown-body table {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 1em;
+}
+
+.table-wrapper > table {
+  margin-bottom: 0;
 }
 
 .markdown-body th, .markdown-body td {

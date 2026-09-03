@@ -50,6 +50,7 @@ const sidebarOverlay = document.getElementById('sidebar-overlay');
 const themeToggle = document.getElementById('theme-toggle');
 const themeIconSun = document.getElementById('theme-icon-sun');
 const themeIconMoon = document.getElementById('theme-icon-moon');
+const themeIconDevice = document.getElementById('theme-icon-device');
 const logoutBtn = document.getElementById('logout-btn');
 const historyList = document.getElementById('history-list');
 const clearHistoryBtn = document.getElementById('clear-history-btn');
@@ -213,11 +214,39 @@ document.addEventListener('visibilitychange', () => {
 
 // ── Client-side routing ─────────────────────────────────────────────────────
 
+// Note URLs use a base36 encoding of the UUID (25 chars, [0-9a-z]) for shorter
+// links. Storage keys stay UUID-based; encoding is a URL-layer concern only.
+// Legacy UUID URLs are still accepted.
 const UUID_RE = /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const SHORT_ID_RE = /^\/([0-9a-z]{25})$/i;
+const SHORT_ID_LENGTH = 25;
+const UUID_LIMIT = 1n << 128n;
+
+function uuidToShortId(uuid) {
+  return BigInt('0x' + uuid.replace(/-/g, '')).toString(36).padStart(SHORT_ID_LENGTH, '0');
+}
+
+function shortIdToUuid(shortId) {
+  let n = 0n;
+  for (const ch of shortId.toLowerCase()) {
+    const digit = parseInt(ch, 36);
+    if (Number.isNaN(digit)) return null;
+    n = n * 36n + BigInt(digit);
+  }
+  if (n >= UUID_LIMIT) return null;
+  const hex = n.toString(16).padStart(32, '0');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 function getFileIdFromPath() {
-  const match = location.pathname.match(UUID_RE);
-  return match ? match[1] : null;
+  const uuidMatch = location.pathname.match(UUID_RE);
+  if (uuidMatch) return uuidMatch[1].toLowerCase();
+  const shortMatch = location.pathname.match(SHORT_ID_RE);
+  return shortMatch ? shortIdToUuid(shortMatch[1]) : null;
+}
+
+function filePath(id) {
+  return `/${uuidToShortId(id)}`;
 }
 
 function pushUrl(path) {
@@ -284,6 +313,9 @@ function showApp() {
   startPolling();
   const deepLinkId = getFileIdFromPath();
   if (deepLinkId) {
+    if (location.pathname !== filePath(deepLinkId)) {
+      history.replaceState(null, '', filePath(deepLinkId));
+    }
     viewFile(deepLinkId, { updateUrl: false });
   }
 }
@@ -314,29 +346,55 @@ logoutBtn.addEventListener('click', async () => {
 
 // ── Theme ───────────────────────────────────────────────────────────────────
 
-function setTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('theme', theme);
-  const isDark = theme === 'dark';
-  themeIconSun.hidden = isDark;
-  themeIconMoon.hidden = !isDark;
-  hljsThemeLink.href = isDark
+// Three modes: 'light' and 'dark' are manual; 'device' follows the OS
+// prefers-color-scheme setting and updates live when it changes.
+const THEME_MODES = ['light', 'dark', 'device'];
+const THEME_LABELS = { light: 'Light', dark: 'Dark', device: 'Device' };
+const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+function getThemeMode() {
+  const saved = localStorage.getItem('theme');
+  return THEME_MODES.includes(saved) ? saved : 'device';
+}
+
+function resolveTheme(mode) {
+  if (mode === 'device') return systemDarkQuery.matches ? 'dark' : 'light';
+  return mode;
+}
+
+function setTheme(mode) {
+  if (!THEME_MODES.includes(mode)) mode = 'device';
+  localStorage.setItem('theme', mode);
+  document.documentElement.setAttribute('data-theme-mode', mode);
+
+  const resolved = resolveTheme(mode);
+  document.documentElement.setAttribute('data-theme', resolved);
+  hljsThemeLink.href = resolved === 'dark'
     ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css'
     : 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css';
+
+  themeIconSun.hidden = mode !== 'light';
+  themeIconMoon.hidden = mode !== 'dark';
+  themeIconDevice.hidden = mode !== 'device';
+
+  const next = THEME_MODES[(THEME_MODES.indexOf(mode) + 1) % THEME_MODES.length];
+  const label = `Theme: ${THEME_LABELS[mode]} (click for ${THEME_LABELS[next]})`;
+  themeToggle.setAttribute('aria-label', label);
+  themeToggle.title = label;
 }
 
 function initTheme() {
-  const saved = localStorage.getItem('theme');
-  if (saved) {
-    setTheme(saved);
-  } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    setTheme('dark');
-  }
+  setTheme(getThemeMode());
 }
 
+// Follow OS theme changes while in device mode
+systemDarkQuery.addEventListener('change', () => {
+  if (getThemeMode() === 'device') setTheme('device');
+});
+
 themeToggle.addEventListener('click', () => {
-  const current = document.documentElement.getAttribute('data-theme');
-  setTheme(current === 'dark' ? 'light' : 'dark');
+  const current = getThemeMode();
+  setTheme(THEME_MODES[(THEME_MODES.indexOf(current) + 1) % THEME_MODES.length]);
 });
 
 // ── Sidebar ─────────────────────────────────────────────────────────────────
@@ -388,6 +446,20 @@ function createFolderBadgeSvg() {
   return svg;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Buckets a timestamp into a relative date heading. "This Week" = the last
+// 7 days (excluding today/yesterday). Missing/invalid timestamps fall to Older.
+function historyGroupLabel(iso, startOfToday) {
+  if (!iso) return 'Older';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return 'Older';
+  if (t >= startOfToday) return 'Today';
+  if (t >= startOfToday - DAY_MS) return 'Yesterday';
+  if (t >= startOfToday - 6 * DAY_MS) return 'This Week';
+  return 'Older';
+}
+
 function renderHistoryList(history) {
   historyList.textContent = '';
 
@@ -399,7 +471,20 @@ function renderHistoryList(history) {
     return;
   }
 
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  let currentGroup = null;
+
   for (const entry of history) {
+    const group = historyGroupLabel(entry.viewedAt, startOfToday);
+    if (group !== currentGroup) {
+      currentGroup = group;
+      const heading = document.createElement('li');
+      heading.className = 'history-group-heading';
+      heading.textContent = group;
+      historyList.appendChild(heading);
+    }
+
     const li = document.createElement('li');
     li.addEventListener('click', () => viewFile(entry.id));
 
@@ -798,7 +883,7 @@ async function viewFile(id, { updateUrl = true } = {}) {
     } else {
       viewerCreated.hidden = true;
     }
-    if (updateUrl) pushUrl(`/${id}`);
+    if (updateUrl) pushUrl(filePath(id));
     closeSidebar();
     loadHistory();
     loadFolders();
@@ -808,6 +893,7 @@ async function viewFile(id, { updateUrl = true } = {}) {
 function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
   addCodeCopyButtons();
+  wrapTables();
   viewerTitle.textContent = title || 'Markdown Viewer';
   currentFilename = title || 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', id ? 'true' : 'false');
@@ -832,6 +918,18 @@ function addCodeCopyButtons() {
       setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
     });
     wrapper.appendChild(btn);
+  }
+}
+
+// Wide tables scroll horizontally inside their own container instead of
+// pushing the page wider.
+function wrapTables() {
+  for (const table of renderedOutput.querySelectorAll('table')) {
+    if (table.parentNode.classList.contains('table-wrapper')) continue;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'table-wrapper';
+    table.parentNode.insertBefore(wrapper, table);
+    wrapper.appendChild(table);
   }
 }
 

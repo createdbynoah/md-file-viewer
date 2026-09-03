@@ -602,13 +602,26 @@ app.post('/api/folders/:id/files/:fileId/move', async (c) => {
 });
 
 // ── SPA fallback ────────────────────────────────────────────────────────────
-// Serve index.html for /<uuid> paths so direct links & browser refresh work.
+// Serve index.html for note paths so direct links & browser refresh work.
+// Note URLs are base36-encoded UUIDs (25 chars, [0-9a-z]); legacy full-UUID
+// URLs are also accepted. The client decodes the path back to the UUID.
 
 const UUID_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SHORT_ID_RE = /^\/[0-9a-z]{25}$/i;
+const UUID_LIMIT = 1n << 128n;
+
+function isValidShortId(path) {
+  if (!SHORT_ID_RE.test(path)) return false;
+  let n = 0n;
+  for (const ch of path.slice(1).toLowerCase()) {
+    n = n * 36n + BigInt(parseInt(ch, 36));
+  }
+  return n < UUID_LIMIT;
+}
 
 app.get('*', async (c) => {
   const path = new URL(c.req.url).pathname;
-  if (UUID_RE.test(path)) {
+  if (UUID_RE.test(path) || isValidShortId(path)) {
     const url = new URL(c.req.url);
     url.pathname = '/';
     return c.env.ASSETS.fetch(new Request(url, c.req.raw));
