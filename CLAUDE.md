@@ -56,9 +56,9 @@ GitHub Actions (`.github/workflows/deploy.yml`) auto-deploys to Cloudflare Worke
 
 ## Routing
 
-**Server-side:** A catch-all Hono route at the bottom of `src/worker.js` matches `/<uuid>` paths and serves `index.html` via the `ASSETS` binding — this is the SPA fallback so direct file links and browser refresh work. Non-UUID paths return 404.
+**Server-side:** A catch-all Hono route at the bottom of `src/worker.js` matches note paths and serves `index.html` via the `ASSETS` binding — this is the SPA fallback so direct file links and browser refresh work. Note URLs are base36-encoded UUIDs (25 chars, `[0-9a-z]`, e.g. `/djmlk8rqmyfbvw0cfe0lkllww`); legacy full-UUID paths are also accepted. Other paths return 404. Storage keys (R2/KV) remain plain UUIDs — the encoding is URL-layer only.
 
-**Client-side:** `public/js/app.js` uses `history.pushState` / `popstate` for navigation. Viewing a file pushes `/<uuid>` to the URL; going back pushes `/`. Functions that change views accept `{ updateUrl: false }` to prevent double-pushing during `popstate` events. On initial load after auth, `showApp()` checks for a deep-linked file ID in the URL path.
+**Client-side:** `public/js/app.js` uses `history.pushState` / `popstate` for navigation. Viewing a file pushes `/<base36-id>` to the URL (`uuidToShortId`/`shortIdToUuid` in `app.js`); going back pushes `/`. A legacy `/<uuid>` deep link is decoded and rewritten to the short form via `replaceState`. Functions that change views accept `{ updateUrl: false }` to prevent double-pushing during `popstate` events. On initial load after auth, `showApp()` checks for a deep-linked file ID in the URL path.
 
 ## Key Patterns
 
@@ -67,4 +67,7 @@ GitHub Actions (`.github/workflows/deploy.yml`) auto-deploys to Cloudflare Worke
 - Sidebar uses CSS `margin-left` transition on desktop, `transform: translateX` on mobile (<768px)
 - History is capped at 100 entries, stored as a single KV value
 - File metadata stored separately in KV (`meta:{uuid}`) from file content in R2
-- SPA routing uses strict UUID regex on both server and client — only valid file paths get the fallback
+- SPA routing uses strict ID regexes (25-char base36 or legacy UUID) on both server and client — only valid file paths get the fallback
+- Theme has three modes stored in `localStorage.theme`: `light`, `dark`, `device` (follows `prefers-color-scheme` live); `data-theme` on `<html>` always holds the resolved light/dark value
+- Sidebar history is grouped under Today / Yesterday / This Week / Older headings based on `viewedAt`
+- Wide tables are wrapped in `.table-wrapper` after render so they scroll horizontally within their own bounds
