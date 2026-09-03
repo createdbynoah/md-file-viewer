@@ -15,6 +15,7 @@
 ## Task 1: Backend — Folder KV helpers
 
 **Files:**
+
 - Modify: `src/worker.js:34-67` (after history helpers section)
 
 **Step 1: Add folder read/write helpers after the history helpers block (after line 67)**
@@ -60,6 +61,7 @@ git commit -m "feat(folders): add KV read/write helpers for folders"
 ## Task 2: Backend — CRUD routes (create, list, rename, delete)
 
 **Files:**
+
 - Modify: `src/worker.js` (add routes after history routes, before SPA fallback at line 345)
 
 **Step 1: Add GET /api/folders route**
@@ -156,11 +158,17 @@ app.delete('/api/folders/:id', async (c) => {
   if (folder.fileIds.length > 0) {
     const deleted = new Set(folder.fileIds);
     const history = await readHistory(c.env.HISTORY);
-    await writeHistory(c.env.HISTORY, history.filter((h) => !deleted.has(h.id)));
+    await writeHistory(
+      c.env.HISTORY,
+      history.filter((h) => !deleted.has(h.id))
+    );
   }
 
   // Remove the folder itself
-  await writeFolders(c.env.HISTORY, folders.filter((f) => f.id !== id));
+  await writeFolders(
+    c.env.HISTORY,
+    folders.filter((f) => f.id !== id)
+  );
 
   return c.json({ success: true });
 });
@@ -182,6 +190,7 @@ git commit -m "feat(folders): add CRUD API routes for folders"
 ## Task 3: Backend — File-folder membership routes
 
 **Files:**
+
 - Modify: `src/worker.js` (add routes after folder CRUD routes)
 
 **Step 1: Add POST /api/folders/:id/files (add file to folder)**
@@ -239,7 +248,9 @@ app.delete('/api/folders/:id/files/:fileId', async (c) => {
       const meta = JSON.parse(metaJson);
       delete meta.folderId;
       await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-    } catch { /* ignore corrupt meta */ }
+    } catch {
+      /* ignore corrupt meta */
+    }
   }
 
   return c.json({ success: true });
@@ -271,7 +282,9 @@ app.post('/api/folders/:id/files/:fileId/move', async (c) => {
       const meta = JSON.parse(metaJson);
       meta.folderId = targetFolderId;
       await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-    } catch { /* ignore corrupt meta */ }
+    } catch {
+      /* ignore corrupt meta */
+    }
   }
 
   return c.json({ success: true });
@@ -292,6 +305,7 @@ git commit -m "feat(folders): add file-folder membership API routes"
 ## Task 4: Backend — Retention exemption + file delete cleanup
 
 **Files:**
+
 - Modify: `src/worker.js:95-123` (runRetention function)
 - Modify: `src/worker.js:307-318` (DELETE /api/files/:id)
 
@@ -335,7 +349,10 @@ async function runRetention(env) {
   if (deletedIds.length > 0) {
     const deleted = new Set(deletedIds);
     const history = await readHistory(env.HISTORY);
-    await writeHistory(env.HISTORY, history.filter((h) => !deleted.has(h.id)));
+    await writeHistory(
+      env.HISTORY,
+      history.filter((h) => !deleted.has(h.id))
+    );
   }
 }
 ```
@@ -351,7 +368,10 @@ app.delete('/api/files/:id', async (c) => {
 
   // Remove from history
   const history = await readHistory(c.env.HISTORY);
-  await writeHistory(c.env.HISTORY, history.filter((h) => h.id !== id));
+  await writeHistory(
+    c.env.HISTORY,
+    history.filter((h) => h.id !== id)
+  );
 
   // Remove from any folder
   const folders = await readFolders(c.env.HISTORY);
@@ -381,6 +401,7 @@ git commit -m "feat(folders): add retention exemption and file-delete folder cle
 ## Task 5: Backend — Include folderId in history API response
 
 **Files:**
+
 - Modify: `src/worker.js` (GET /api/history route)
 
 **Step 1: Enrich history entries with folderId**
@@ -401,7 +422,7 @@ app.get('/api/history', async (c) => {
       .map((h) => {
         const meta = allMeta.get(h.id);
         return { ...h, folderId: meta?.folderId || null };
-      }),
+      })
   );
 });
 ```
@@ -420,6 +441,7 @@ git commit -m "feat(folders): include folderId in history API response"
 ## Task 6: Frontend — Sidebar HTML + folder section rendering
 
 **Files:**
+
 - Modify: `public/index.html:70-76` (sidebar section)
 - Modify: `public/js/app.js` (add folder DOM refs, loadFolders, renderFolderList)
 
@@ -430,9 +452,23 @@ git commit -m "feat(folders): include folderId in history API response"
 <aside id="sidebar" class="sidebar">
   <div class="sidebar-section">
     <h2 class="sidebar-heading">Folders</h2>
-    <button id="create-folder-btn" class="icon-btn sidebar-add-btn" aria-label="Create folder" title="New folder">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+    <button
+      id="create-folder-btn"
+      class="icon-btn sidebar-add-btn"
+      aria-label="Create folder"
+      title="New folder"
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+      >
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
       </svg>
     </button>
   </div>
@@ -576,7 +612,13 @@ function renderFolderList(folders) {
         removeBtn.title = 'Remove from folder';
         removeBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          await api('/api/folders/' + encodeURIComponent(folder.id) + '/files/' + encodeURIComponent(file.id), { method: 'DELETE' });
+          await api(
+            '/api/folders/' +
+              encodeURIComponent(folder.id) +
+              '/files/' +
+              encodeURIComponent(file.id),
+            { method: 'DELETE' }
+          );
           loadFolders();
         });
 
@@ -618,7 +660,10 @@ createFolderBtn.addEventListener('click', () => {
   }
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      save();
+    }
     if (e.key === 'Escape') li.remove();
   });
   input.addEventListener('blur', save);
@@ -647,8 +692,13 @@ function startFolderRename(folder, nameEl) {
   }
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
-    if (e.key === 'Escape') { input.replaceWith(nameEl); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      save();
+    }
+    if (e.key === 'Escape') {
+      input.replaceWith(nameEl);
+    }
   });
   input.addEventListener('blur', save);
 }
@@ -689,6 +739,7 @@ git commit -m "feat(folders): add sidebar folder section with create/rename/dele
 ## Task 7: Frontend — Folder CSS styles
 
 **Files:**
+
 - Modify: `public/css/style.css` (add after `.history-empty` block, around line 351)
 
 **Step 1: Add folder styles**
@@ -777,7 +828,9 @@ Insert after the `.history-empty` rule:
   padding: 2px 4px;
   font-size: 0.8125rem;
   border-radius: 3px;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 
 .folder-action-btn:hover {
@@ -826,7 +879,9 @@ Insert after the `.history-empty` rule:
   cursor: pointer;
   padding: 2px;
   flex-shrink: 0;
-  transition: opacity 0.15s, color 0.15s;
+  transition:
+    opacity 0.15s,
+    color 0.15s;
 }
 
 .folder-file-item:hover .folder-file-remove {
@@ -881,6 +936,7 @@ git commit -m "feat(folders): add CSS styles for folder sidebar section"
 ## Task 8: Frontend — History folder badge
 
 **Files:**
+
 - Modify: `public/js/app.js` (renderHistoryList function)
 
 **Step 1: Add a helper to create folder icon SVG elements**
@@ -893,7 +949,10 @@ function createFolderBadgeSvg() {
   svg.setAttribute('stroke', 'currentColor');
   svg.setAttribute('stroke-width', '2');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z');
+  path.setAttribute(
+    'd',
+    'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'
+  );
   svg.appendChild(path);
   return svg;
 }
@@ -966,6 +1025,7 @@ git commit -m "feat(folders): show folder badge on history items"
 ## Task 9: Frontend — Viewer toolbar folder button
 
 **Files:**
+
 - Modify: `public/index.html:99-105` (viewer toolbar)
 - Modify: `public/js/app.js` (add folder toolbar button logic)
 - Modify: `public/css/style.css` (dropdown styles)
@@ -1024,7 +1084,13 @@ function renderFolderDropdown() {
     removeOpt.className = 'folder-dropdown-item';
     removeOpt.textContent = 'Remove from folder';
     removeOpt.addEventListener('click', async () => {
-      await api('/api/folders/' + encodeURIComponent(currentFolderId) + '/files/' + encodeURIComponent(currentFileId), { method: 'DELETE' });
+      await api(
+        '/api/folders/' +
+          encodeURIComponent(currentFolderId) +
+          '/files/' +
+          encodeURIComponent(currentFileId),
+        { method: 'DELETE' }
+      );
       folderDropdown.hidden = true;
       loadFolders();
       loadHistory();
@@ -1066,7 +1132,10 @@ function renderFolderDropdown() {
   newFolderOpt.addEventListener('click', async () => {
     const name = prompt('Folder name:');
     if (!name || !name.trim()) return;
-    const res = await api('/api/folders', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+    const res = await api('/api/folders', {
+      method: 'POST',
+      body: JSON.stringify({ name: name.trim() }),
+    });
     if (res.ok) {
       const folder = await res.json();
       await api('/api/folders/' + encodeURIComponent(folder.id) + '/files', {
@@ -1093,11 +1162,13 @@ function getCurrentFileFolderId() {
 **Step 4: Show/hide folder button when viewing files**
 
 In `viewFile()`, after `copyMdBtn.hidden = false;`, add:
+
 ```javascript
 folderBtn.hidden = false;
 ```
 
 In `showInputArea()`, after `copyMdBtn.hidden = true;`, add:
+
 ```javascript
 folderBtn.hidden = true;
 folderDropdown.hidden = true;
@@ -1170,12 +1241,14 @@ git commit -m "feat(folders): add folder button and dropdown in viewer toolbar"
 ## Task 10: Frontend — Drag and drop (desktop)
 
 **Files:**
+
 - Modify: `public/js/app.js` (add drag/drop event listeners in render functions)
 - Modify: `public/css/style.css` (drag-over visual feedback)
 
 **Step 1: Make history items draggable**
 
 In `renderHistoryList`, when creating each `li`, add after the click listener:
+
 ```javascript
 li.draggable = true;
 li.dataset.fileId = entry.id;
@@ -1188,6 +1261,7 @@ li.addEventListener('dragstart', (e) => {
 **Step 2: Make folder file items draggable**
 
 In `renderFolderList`, when creating each `fileLi` inside a folder, add after the click listener:
+
 ```javascript
 fileLi.draggable = true;
 fileLi.dataset.fileId = file.id;
@@ -1222,10 +1296,17 @@ header.addEventListener('drop', async (e) => {
   if (!fileId) return;
 
   if (sourceFolderId && sourceFolderId !== folder.id) {
-    await api('/api/folders/' + encodeURIComponent(sourceFolderId) + '/files/' + encodeURIComponent(fileId) + '/move', {
-      method: 'POST',
-      body: JSON.stringify({ targetFolderId: folder.id }),
-    });
+    await api(
+      '/api/folders/' +
+        encodeURIComponent(sourceFolderId) +
+        '/files/' +
+        encodeURIComponent(fileId) +
+        '/move',
+      {
+        method: 'POST',
+        body: JSON.stringify({ targetFolderId: folder.id }),
+      }
+    );
   } else if (!sourceFolderId) {
     await api('/api/folders/' + encodeURIComponent(folder.id) + '/files', {
       method: 'POST',
@@ -1261,21 +1342,25 @@ git commit -m "feat(folders): add drag-and-drop for file-to-folder moves"
 ## Task 11: Frontend — Reload folders after file operations
 
 **Files:**
+
 - Modify: `public/js/app.js` (multiple locations)
 
 **Step 1: Add loadFolders calls alongside existing loadHistory calls**
 
 In `viewFile()`, after `loadHistory();`, add:
+
 ```javascript
 loadFolders();
 ```
 
 In the `deleteFileBtn` click handler, after `loadHistory();`, add:
+
 ```javascript
 loadFolders();
 ```
 
 In the `viewerTitle` rename save function, after `loadHistory();`, add:
+
 ```javascript
 loadFolders();
 ```
@@ -1300,6 +1385,7 @@ Run: `pnpm dev`
 **Step 2: Test complete workflow in browser at http://localhost:8787**
 
 Verify each of these in order:
+
 1. Login, sidebar shows "Folders" section (empty) above History
 2. Click `+` to create a folder — inline input appears, type name, Enter saves
 3. Upload a file, view it — folder button appears in toolbar
@@ -1325,17 +1411,17 @@ git commit -m "fix(folders): address issues found during manual testing"
 
 ## Summary
 
-| Task | Description | Files |
-|------|-------------|-------|
-| 1 | Backend KV helpers | `src/worker.js` |
-| 2 | Backend CRUD routes | `src/worker.js` |
-| 3 | Backend membership routes | `src/worker.js` |
-| 4 | Backend retention + delete cleanup | `src/worker.js` |
-| 5 | Backend history folderId enrichment | `src/worker.js` |
-| 6 | Frontend sidebar HTML + folder rendering | `index.html`, `app.js` |
-| 7 | Frontend folder CSS | `style.css` |
-| 8 | Frontend history folder badge | `app.js` |
-| 9 | Frontend viewer toolbar folder button | `index.html`, `app.js`, `style.css` |
-| 10 | Frontend drag and drop | `app.js`, `style.css` |
-| 11 | Frontend reload folders after operations | `app.js` |
-| 12 | Manual end-to-end verification | (testing) |
+| Task | Description                              | Files                               |
+| ---- | ---------------------------------------- | ----------------------------------- |
+| 1    | Backend KV helpers                       | `src/worker.js`                     |
+| 2    | Backend CRUD routes                      | `src/worker.js`                     |
+| 3    | Backend membership routes                | `src/worker.js`                     |
+| 4    | Backend retention + delete cleanup       | `src/worker.js`                     |
+| 5    | Backend history folderId enrichment      | `src/worker.js`                     |
+| 6    | Frontend sidebar HTML + folder rendering | `index.html`, `app.js`              |
+| 7    | Frontend folder CSS                      | `style.css`                         |
+| 8    | Frontend history folder badge            | `app.js`                            |
+| 9    | Frontend viewer toolbar folder button    | `index.html`, `app.js`, `style.css` |
+| 10   | Frontend drag and drop                   | `app.js`, `style.css`               |
+| 11   | Frontend reload folders after operations | `app.js`                            |
+| 12   | Manual end-to-end verification           | (testing)                           |

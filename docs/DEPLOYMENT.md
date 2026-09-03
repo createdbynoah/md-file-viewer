@@ -4,14 +4,14 @@ md-file-viewer runs on Cloudflare Workers with R2 (file storage) and KV (history
 
 ## Architecture
 
-| Component | Service | Details |
-|-----------|---------|---------|
-| Server | Cloudflare Worker | Hono framework, `src/worker.js` |
-| Static assets | Workers Static Assets | `public/` directory, served from edge CDN |
-| File storage | R2 bucket | `md-file-viewer-files`, keyed as `{uuid}.md` |
-| History + metadata | KV namespace | `history` key (JSON array) + `meta:{uuid}` keys |
-| Auth | Web Crypto API | HMAC-SHA256 signed cookies |
-| Secrets | Wrangler secrets | `ACCESS_PASSWORD`, `COOKIE_SECRET` |
+| Component          | Service               | Details                                         |
+| ------------------ | --------------------- | ----------------------------------------------- |
+| Server             | Cloudflare Worker     | Hono framework, `src/worker.js`                 |
+| Static assets      | Workers Static Assets | `public/` directory, served from edge CDN       |
+| File storage       | R2 bucket             | `md-file-viewer-files`, keyed as `{uuid}.md`    |
+| History + metadata | KV namespace          | `history` key (JSON array) + `meta:{uuid}` keys |
+| Auth               | Web Crypto API        | HMAC-SHA256 signed cookies                      |
+| Secrets            | Wrangler secrets      | `ACCESS_PASSWORD`, `COOKIE_SECRET`              |
 
 ## Prerequisites
 
@@ -60,9 +60,9 @@ openssl rand -base64 32
 
 Add these as [repository secrets](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions) in your GitHub repo settings:
 
-| Secret | Description |
-|--------|-------------|
-| `CLOUDFLARE_API_TOKEN` | API token with Workers/R2/KV permissions |
+| Secret                  | Description                                                    |
+| ----------------------- | -------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`  | API token with Workers/R2/KV permissions                       |
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID (found in dashboard URL or sidebar) |
 
 To create an API token: Cloudflare dashboard > My Profile > API Tokens > Create Token > Use the "Edit Cloudflare Workers" template.
@@ -77,21 +77,17 @@ The app will be live at `md-file-viewer.<your-account>.workers.dev`.
 
 ## CI/CD
 
-Deployments are automated via GitHub Actions (`.github/workflows/deploy.yml`).
+GitHub Actions (`.github/workflows/ci.yml`) runs on every PR into `main` and every push to `main`.
 
-**Trigger:** Push to `main` that changes any of these paths:
-- `src/**`
-- `public/**`
-- `wrangler.jsonc`
-- `package.json`
-- `.github/workflows/deploy.yml`
+**`ci` job:** `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm test`.
 
-**What it does:**
-1. Checks out the code
-2. Installs dependencies with pnpm
-3. Runs `wrangler deploy` with Cloudflare credentials from repo secrets
+**`deploy` job:** runs only on push to `main`, only after `ci` succeeds (`needs: ci`). Runs `wrangler deploy` with Cloudflare credentials from repo secrets. There is no path filter — every green merge to `main` deploys.
 
-PRs do not trigger deployments — only merges to `main`.
+PRs never deploy. `main` has a ruleset requiring the `ci` check and a PR before merge.
+
+## UAT harness
+
+`pnpm uat` starts `wrangler dev --env uat` detached with `AUTH_STUB_USER` (auth bypassed, `/api/dev/seed` available), seeds deterministic scenarios, and prints the URL. `pnpm uat:stop` tears it down. The `uat` env in `wrangler.jsonc` has no route or cron. See `.claude/skills/verifier-web/SKILL.md`.
 
 ## Local development
 
@@ -119,6 +115,7 @@ pnpm run deploy
 ```
 
 This runs `wrangler deploy`, which requires either:
+
 - Being logged in via `npx wrangler login`, or
 - `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` environment variables
 
@@ -140,13 +137,17 @@ This runs `wrangler deploy`, which requires either:
 ## Troubleshooting
 
 ### Deployment fails with auth error
+
 Verify your `CLOUDFLARE_API_TOKEN` has the correct permissions and hasn't expired.
 
 ### KV namespace not found
+
 Make sure the `id` in `wrangler.jsonc` matches the namespace ID from `npx wrangler kv namespace list`.
 
 ### Changes deployed but not visible
+
 Workers and KV use edge caching. Changes propagate globally within ~60 seconds. Hard refresh (`Ctrl+Shift+R`) to bypass browser cache for static assets.
 
 ### Local dev data disappeared
+
 Wrangler stores local R2/KV data in `.wrangler/state/`. This persists between `pnpm dev` runs but is gitignored.

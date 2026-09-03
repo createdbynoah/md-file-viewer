@@ -10,8 +10,7 @@
 
 ## Testing
 
-<!-- How was this tested? -->
-
-- [ ] Tested locally with `pnpm dev`
+- [ ] `pnpm lint`, `pnpm typecheck`, `pnpm test` pass
+- [ ] Tested locally with `pnpm dev` or `pnpm uat`
 - [ ] Verified on mobile viewport
 - [ ] Checked light and dark themes

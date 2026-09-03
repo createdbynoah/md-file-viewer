@@ -6,7 +6,16 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc -p jsconfig.json",
+    "prepare": "husky",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "uat": "node scripts/uat.mjs",
+    "uat:stop": "node scripts/uat-stop.mjs"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +25,17 @@
     "hono": "^4.12.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.21",
+    "@cloudflare/workers-types": "^5.20260903.1",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
     "wrangler": "^4"
   },
   "pnpm": {
@@ -23,6 +43,15 @@
       "esbuild",
       "workerd",
       "sharp"
+    ]
+  },
+  "lint-staged": {
+    "*.{js,mjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,jsonc,md,css,html,yml,yaml}": [
+      "prettier --write"
     ]
   }
 }

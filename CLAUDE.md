@@ -11,48 +11,66 @@ md-file-viewer is a password-protected Markdown file viewer running on Cloudflar
 ```bash
 pnpm install          # Install dependencies
 pnpm dev              # Local dev server on port 8787 (emulates R2/KV locally)
-pnpm run deploy       # Deploy to Cloudflare Workers
+pnpm run deploy       # Deploy to Cloudflare Workers (CI only — never run manually)
+pnpm lint             # eslint
+pnpm format:check     # prettier
+pnpm typecheck        # tsc --checkJs over src/ (jsconfig.json)
+pnpm test             # vitest: unit + workers-pool integration
+pnpm uat              # detached wrangler dev + seed for agent-driven UAT (see .claude/skills/verifier-web)
+pnpm uat:stop
 ```
 
-No test framework is configured. No linter is configured.
+Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged files.
 
 ## Architecture
 
 **Backend:** Single Hono app in `src/worker.js` — all API routes in one file. Runs as a Cloudflare Worker.
 
 **Frontend:** Vanilla JS SPA in `public/` — no build step, no bundler. Static assets served via Workers Static Assets from the `public/` directory.
+
 - `public/index.html` — full HTML structure (login screen + app screen, toggled via `hidden` attribute)
 - `public/js/app.js` — all client logic (auth, file upload, paste, history, markdown rendering)
 - `public/css/style.css` — CSS custom properties for light/dark theming
 
 **Storage bindings** (configured in `wrangler.jsonc`):
+
 - `MD_FILES` — R2 bucket, stores raw markdown as `{uuid}.md`
 - `HISTORY` — KV namespace, stores `history` (JSON array, max 100 entries) and `meta:{uuid}` (per-file metadata)
 
 **Auth:** HMAC-SHA256 signed cookies via Web Crypto API. Middleware on `/api/*` checks the cookie, exempting `/api/auth/login` and `/api/auth/check`. Secrets `ACCESS_PASSWORD` and `COOKIE_SECRET` come from Wrangler secrets (production) or `.dev.vars` (local dev).
 
+**UAT stub:** `isDevEnv(env)` in `src/worker.js` is true only when `AUTH_STUB_USER` is set AND `ENVIRONMENT !== 'production'`. Then auth is bypassed and `/api/dev/seed` + `/api/dev/retention` are mounted; otherwise `/api/dev/*` is a 404 before auth. Only `scripts/uat.mjs` sets the stub (via `wrangler dev --env uat --var`). Guardrail: `src/dev.integration.test.js`. When real auth lands, keep the stub short-circuit in front of the new verifier.
+
 ## API Routes
 
 All routes are prefixed with `/api/`. Auth-protected unless noted:
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/auth/login` | Login (unprotected) |
-| GET | `/api/auth/check` | Check auth status (unprotected) |
-| POST | `/api/auth/logout` | Logout |
-| POST | `/api/upload` | Upload `.md` file (multipart form) |
-| POST | `/api/paste` | Save pasted markdown (JSON body) |
-| GET | `/api/files` | List all files |
-| GET | `/api/files/:id` | Get file content |
-| PATCH  | `/api/files/:id` | Rename file |
-| DELETE | `/api/files/:id` | Delete file |
-| GET | `/api/history` | Get view history |
-| DELETE | `/api/history` | Clear all history |
-| DELETE | `/api/history/:id` | Remove single history entry |
+| Method | Path                 | Purpose                            |
+| ------ | -------------------- | ---------------------------------- |
+| POST   | `/api/auth/login`    | Login (unprotected)                |
+| GET    | `/api/auth/check`    | Check auth status (unprotected)    |
+| POST   | `/api/auth/logout`   | Logout                             |
+| POST   | `/api/upload`        | Upload `.md` file (multipart form) |
+| POST   | `/api/paste`         | Save pasted markdown (JSON body)   |
+| GET    | `/api/files`         | List all files                     |
+| GET    | `/api/files/:id`     | Get file content                   |
+| PATCH  | `/api/files/:id`     | Rename file                        |
+| DELETE | `/api/files/:id`     | Delete file                        |
+| GET    | `/api/history`       | Get view history                   |
+| DELETE | `/api/history`       | Clear all history                  |
+| DELETE | `/api/history/:id`   | Remove single history entry        |
+| POST   | `/api/dev/seed`      | UAT only: reset + seed scenarios   |
+| POST   | `/api/dev/retention` | UAT only: run retention cron now   |
 
 ## CI/CD
 
-GitHub Actions (`.github/workflows/deploy.yml`) auto-deploys to Cloudflare Workers on push to `main` when `src/`, `public/`, `wrangler.jsonc`, or `package.json` change. Requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repo secrets.
+GitHub Actions (`.github/workflows/ci.yml`): `ci` job (lint, format:check, typecheck, test) on PRs and pushes to `main`; `deploy` job runs `wrangler deploy` on push to `main` only after `ci` passes. Requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repo secrets. Never deploy manually.
+
+## Testing
+
+`vitest.config.js` has two projects: `unit` (node, `src/**/*.test.js`) and `integration` (`@cloudflare/vitest-pool-workers`, `src/**/*.integration.test.js`, miniflare R2 `MD_FILES` + KV `HISTORY`, isolated storage off — every test calls `clearAll()` in `beforeEach`). Tests drive the Hono app directly via `worker.fetch(req, env, ctx)` with a stubbed `ASSETS` fetcher (`src/test-utils/app.js`), so they control the full env. Vitest is pinned to 3.x for pool-workers compat.
+
+Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 
 ## Routing
 

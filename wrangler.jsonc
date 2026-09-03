@@ -34,9 +34,20 @@
   // Default log level for structured logger (override in .dev.vars for local dev)
   "vars": {
     "LOG_LEVEL": "info",
+    // Pinned so isDevEnv() can never be true in production (see src/worker.js)
+    "ENVIRONMENT": "production",
   },
   // Built-in observability (Workers Logs)
   "observability": {
     "enabled": true,
+  },
+  // UAT env used by scripts/uat.mjs (`wrangler dev --env uat`). Bindings are not
+  // inherited by envs, so they are repeated; there is no route or cron here.
+  "env": {
+    "uat": {
+      "r2_buckets": [{ "binding": "MD_FILES", "bucket_name": "md-file-viewer-files" }],
+      "kv_namespaces": [{ "binding": "HISTORY", "id": "4b5e3a41933d4e08b4e048d12d095a96" }],
+      "vars": { "LOG_LEVEL": "debug", "ENVIRONMENT": "uat" },
+    },
   },
 }

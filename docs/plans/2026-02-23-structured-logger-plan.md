@@ -15,6 +15,7 @@
 ### Task 1: Create logger module
 
 **Files:**
+
 - Create: `src/logger.js`
 
 **Step 1: Create `src/logger.js` with the `createLogger` factory**
@@ -52,6 +53,7 @@ git commit -m "feat(logger): add structured logger module with configurable leve
 ### Task 2: Add request logging middleware
 
 **Files:**
+
 - Modify: `src/worker.js:1-4` (add import)
 - Modify: `src/worker.js:154-166` (insert middleware before auth middleware)
 
@@ -100,6 +102,7 @@ git commit -m "feat(logger): add request logging middleware"
 ### Task 3: Add auth event logging
 
 **Files:**
+
 - Modify: `src/worker.js` — auth middleware (line ~156) and auth routes (lines ~170-195)
 
 **Step 1: Add `auth.unauthorized` log to auth middleware**
@@ -107,30 +110,33 @@ git commit -m "feat(logger): add request logging middleware"
 In the existing auth middleware, before the `return c.json({ error: 'Unauthorized' }, 401)` line, add:
 
 ```js
-    const log = c.get('logger');
-    log.warn('auth.unauthorized', { path });
+const log = c.get('logger');
+log.warn('auth.unauthorized', { path });
 ```
 
 **Step 2: Add `auth.failure` and `auth.login` logs to login route**
 
 In `POST /api/auth/login`, after the password check failure:
+
 ```js
-    const log = c.get('logger');
-    log.warn('auth.failure', { reason: 'invalid_password' });
+const log = c.get('logger');
+log.warn('auth.failure', { reason: 'invalid_password' });
 ```
 
 After successful cookie set (before `return c.json({ success: true })`):
+
 ```js
-  const log = c.get('logger');
-  log.info('auth.login');
+const log = c.get('logger');
+log.info('auth.login');
 ```
 
 **Step 3: Add `auth.logout` log to logout route**
 
 In `POST /api/auth/logout`, before the return:
+
 ```js
-  const log = c.get('logger');
-  log.info('auth.logout');
+const log = c.get('logger');
+log.info('auth.logout');
 ```
 
 **Step 4: Commit**
@@ -145,31 +151,35 @@ git commit -m "feat(logger): add auth event logging"
 ### Task 4: Add file operation event logging
 
 **Files:**
+
 - Modify: `src/worker.js` — upload, paste, file content, rename, delete routes
 
 **Step 1: Add `file.upload` log**
 
 In `POST /api/upload`, after `addHistoryEntry` and before the return:
+
 ```js
-  const log = c.get('logger');
-  log.info('file.upload', { fileId: id, filename: originalName, size: content.length });
+const log = c.get('logger');
+log.info('file.upload', { fileId: id, filename: originalName, size: content.length });
 ```
 
 **Step 2: Add `file.paste` log**
 
 In `POST /api/paste`, after `addHistoryEntry` and before the return:
+
 ```js
-  const log = c.get('logger');
-  log.info('file.paste', { fileId: id, filename: displayName, size: content.length });
+const log = c.get('logger');
+log.info('file.paste', { fileId: id, filename: displayName, size: content.length });
 ```
 
 **Step 3: Add `file.fetch` and `file.notFound` logs**
 
 In `GET /api/files/:id`:
+
 - After the `if (!object)` check, before the 404 return:
   ```js
-    const log = c.get('logger');
-    log.warn('file.notFound', { fileId: id });
+  const log = c.get('logger');
+  log.warn('file.notFound', { fileId: id });
   ```
 - After `addHistoryEntry` and before the success return:
   ```js
@@ -180,10 +190,11 @@ In `GET /api/files/:id`:
 **Step 4: Add `file.rename` and `file.notFound` logs**
 
 In `PATCH /api/files/:id`:
+
 - After the `if (!metaJson)` 404 check, before the return:
   ```js
-    const log = c.get('logger');
-    log.warn('file.notFound', { fileId: id });
+  const log = c.get('logger');
+  log.warn('file.notFound', { fileId: id });
   ```
 - After `writeHistory` and before the success return:
   ```js
@@ -194,9 +205,10 @@ In `PATCH /api/files/:id`:
 **Step 5: Add `file.delete` log**
 
 In `DELETE /api/files/:id`, before the success return:
+
 ```js
-  const log = c.get('logger');
-  log.info('file.delete', { fileId: id });
+const log = c.get('logger');
+log.info('file.delete', { fileId: id });
 ```
 
 **Step 6: Commit**
@@ -211,38 +223,43 @@ git commit -m "feat(logger): add file operation event logging"
 ### Task 5: Add history and folder event logging
 
 **Files:**
+
 - Modify: `src/worker.js` — history and folder routes
 
 **Step 1: Add `history.clear` log**
 
 In `DELETE /api/history`, before the return:
+
 ```js
-  const log = c.get('logger');
-  log.info('history.clear');
+const log = c.get('logger');
+log.info('history.clear');
 ```
 
 **Step 2: Add `history.remove` log**
 
 In `DELETE /api/history/:id`, before the return:
+
 ```js
-  const log = c.get('logger');
-  log.info('history.remove', { entryId: id });
+const log = c.get('logger');
+log.info('history.remove', { entryId: id });
 ```
 
 **Step 3: Add `folder.create` log**
 
 In `POST /api/folders`, after `writeFolders` and before the return:
+
 ```js
-  const log = c.get('logger');
-  log.info('folder.create', { folderId: folder.id, name: folder.name });
+const log = c.get('logger');
+log.info('folder.create', { folderId: folder.id, name: folder.name });
 ```
 
 **Step 4: Add `folder.delete` log**
 
 In `DELETE /api/folders/:id`, before the success return:
+
 ```js
-  const log = c.get('logger');
-  log.info('folder.delete', { folderId: id, fileCount: folder.fileIds.length });
+const log = c.get('logger');
+log.info('folder.delete', { folderId: id, fileCount: folder.fileIds.length });
 ```
 
 **Step 5: Commit**
@@ -257,6 +274,7 @@ git commit -m "feat(logger): add history and folder event logging"
 ### Task 6: Add retention cron logging
 
 **Files:**
+
 - Modify: `src/worker.js` — `runRetention` function (lines ~115-152) and `scheduled` export (lines ~562-564)
 
 **Step 1: Add logger to `runRetention` function**
@@ -350,11 +368,13 @@ Verify `"msg":"auth.unauthorized"` at warn level.
 ### Task 8: Add LOG_LEVEL to dev vars
 
 **Files:**
+
 - Modify: `.dev.vars` (add `LOG_LEVEL=debug` for local development)
 
 **Step 1: Add LOG_LEVEL to `.dev.vars`**
 
 Append to `.dev.vars`:
+
 ```
 LOG_LEVEL=debug
 ```
