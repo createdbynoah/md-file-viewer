@@ -85,6 +85,10 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every PR into `main` and eve
 
 PRs never deploy. `main` has a ruleset requiring the `ci` check and a PR before merge.
 
+## UAT harness
+
+`pnpm uat` starts `wrangler dev --env uat` detached with `AUTH_STUB_USER` (auth bypassed, `/api/dev/seed` available), seeds deterministic scenarios, and prints the URL. `pnpm uat:stop` tears it down. The `uat` env in `wrangler.jsonc` has no route or cron. See `.claude/skills/verifier-web/SKILL.md`.
+
 ## Local development
 
 ```bash

@@ -13,7 +13,9 @@
     "typecheck": "tsc -p jsconfig.json",
     "prepare": "husky",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "uat": "node scripts/uat.mjs",
+    "uat:stop": "node scripts/uat-stop.mjs"
   },
   "keywords": [],
   "author": "",

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { createLogger } from './logger.js';
+import { seedScenarios } from './seed.js';
 
 /**
  * @typedef {object} Env
@@ -10,6 +11,8 @@ import { createLogger } from './logger.js';
  * @property {string} ACCESS_PASSWORD
  * @property {string} COOKIE_SECRET
  * @property {string} [LOG_LEVEL]
+ * @property {string} [ENVIRONMENT]   'production' in wrangler.jsonc; 'uat' under env.uat
+ * @property {string} [AUTH_STUB_USER] set only by scripts/uat.mjs via `wrangler dev --var`
  */
 
 /** @type {Hono<{ Bindings: Env, Variables: { logger: ReturnType<typeof createLogger> } }>} */
@@ -210,6 +213,22 @@ app.use('/api/*', async (c, next) => {
   log[lvl]('request', { method, path, status, duration });
 });
 
+// ── Dev / UAT gate ──────────────────────────────────────────────────────────
+// Two independent conditions: a stub user must be injected (only scripts/uat.mjs
+// does this, via `wrangler dev --var`) AND the deployment must not be production.
+// Covered by src/dev.integration.test.js — keep those tests green.
+
+function isDevEnv(env) {
+  return Boolean(env.AUTH_STUB_USER) && env.ENVIRONMENT !== 'production';
+}
+
+// /api/dev/* is invisible (404) outside UAT, evaluated before auth so the
+// response is identical to any other unknown route.
+app.use('/api/dev/*', async (c, next) => {
+  if (!isDevEnv(c.env)) return c.notFound();
+  return next();
+});
+
 // ── Auth middleware ──────────────────────────────────────────────────────────
 
 app.use('/api/*', async (c, next) => {
@@ -217,6 +236,7 @@ app.use('/api/*', async (c, next) => {
   if (path === '/api/auth/login' || path === '/api/auth/check') {
     return next();
   }
+  if (isDevEnv(c.env)) return next();
   const token = getCookie(c, 'auth');
   if (!(await verifySignedCookie(token, c.env.COOKIE_SECRET))) {
     const log = c.get('logger');
@@ -257,8 +277,22 @@ app.post('/api/auth/logout', (c) => {
 });
 
 app.get('/api/auth/check', async (c) => {
+  if (isDevEnv(c.env)) return c.json({ authenticated: true, stub: c.env.AUTH_STUB_USER });
   const token = getCookie(c, 'auth');
   return c.json({ authenticated: await verifySignedCookie(token, c.env.COOKIE_SECRET) });
+});
+
+// ── Dev routes (UAT only) ───────────────────────────────────────────────────
+
+app.post('/api/dev/seed', async (c) => {
+  const counts = await seedScenarios(c.env);
+  c.get('logger').info('dev.seed', counts);
+  return c.json({ ok: true, ...counts });
+});
+
+app.post('/api/dev/retention', async (c) => {
+  await runRetention(c.env, c.get('logger'));
+  return c.json({ ok: true });
 });
 
 // ── File upload ─────────────────────────────────────────────────────────────
