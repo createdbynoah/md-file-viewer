@@ -77,23 +77,13 @@ The app will be live at `md-file-viewer.<your-account>.workers.dev`.
 
 ## CI/CD
 
-Deployments are automated via GitHub Actions (`.github/workflows/deploy.yml`).
+GitHub Actions (`.github/workflows/ci.yml`) runs on every PR into `main` and every push to `main`.
 
-**Trigger:** Push to `main` that changes any of these paths:
+**`ci` job:** `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm test`.
 
-- `src/**`
-- `public/**`
-- `wrangler.jsonc`
-- `package.json`
-- `.github/workflows/deploy.yml`
+**`deploy` job:** runs only on push to `main`, only after `ci` succeeds (`needs: ci`). Runs `wrangler deploy` with Cloudflare credentials from repo secrets. There is no path filter — every green merge to `main` deploys.
 
-**What it does:**
-
-1. Checks out the code
-2. Installs dependencies with pnpm
-3. Runs `wrangler deploy` with Cloudflare credentials from repo secrets
-
-PRs do not trigger deployments — only merges to `main`.
+PRs never deploy. `main` has a ruleset requiring the `ci` check and a PR before merge.
 
 ## Local development
 

@@ -11,10 +11,16 @@ md-file-viewer is a password-protected Markdown file viewer running on Cloudflar
 ```bash
 pnpm install          # Install dependencies
 pnpm dev              # Local dev server on port 8787 (emulates R2/KV locally)
-pnpm run deploy       # Deploy to Cloudflare Workers
+pnpm run deploy       # Deploy to Cloudflare Workers (CI only — never run manually)
+pnpm lint             # eslint
+pnpm format:check     # prettier
+pnpm typecheck        # tsc --checkJs over src/ (jsconfig.json)
+pnpm test             # vitest: unit + workers-pool integration
+pnpm uat              # detached wrangler dev + seed for agent-driven UAT (see .claude/skills/verifier-web)
+pnpm uat:stop
 ```
 
-No test framework is configured. No linter is configured.
+Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged files.
 
 ## Architecture
 
@@ -54,7 +60,7 @@ All routes are prefixed with `/api/`. Auth-protected unless noted:
 
 ## CI/CD
 
-GitHub Actions (`.github/workflows/deploy.yml`) auto-deploys to Cloudflare Workers on push to `main` when `src/`, `public/`, `wrangler.jsonc`, or `package.json` change. Requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repo secrets.
+GitHub Actions (`.github/workflows/ci.yml`): `ci` job (lint, format:check, typecheck, test) on PRs and pushes to `main`; `deploy` job runs `wrangler deploy` on push to `main` only after `ci` passes. Requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repo secrets. Never deploy manually.
 
 ## Routing
 
