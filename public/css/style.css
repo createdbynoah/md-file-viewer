@@ -6,9 +6,15 @@
   padding: 0;
 }
 
+button, input, textarea, select {
+  font-family: inherit;
+}
+
 /* ── Light Theme (default) ───────────────────────────────────────────────── */
 
 :root {
+  --font-sans: "Google Sans Flex", "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: "Google Sans Code", "SF Mono", "Cascadia Mono", "Fira Code", ui-monospace, monospace;
   --bg: #ffffff;
   --bg-secondary: #f6f8fa;
   --bg-tertiary: #eef1f5;
@@ -68,7 +74,7 @@ html {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg);
   color: var(--text);
   line-height: 1.6;
@@ -748,7 +754,7 @@ body {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  font-family: "SF Mono", "Cascadia Mono", "Fira Code", monospace;
+  font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.6;
   background: var(--bg);
@@ -897,7 +903,7 @@ body {
   padding: 0.2em 0.4em;
   border-radius: 4px;
   font-size: 0.85em;
-  font-family: "SF Mono", "Cascadia Mono", "Fira Code", monospace;
+  font-family: var(--font-mono);
 }
 
 .pre-wrapper {
@@ -918,6 +924,7 @@ body {
   display: block;
   padding: 16px;
   background: none;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.6;
 }
