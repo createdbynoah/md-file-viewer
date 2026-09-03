@@ -251,6 +251,13 @@ body {
   color: var(--text);
 }
 
+/* Theme toggle swaps between sun / moon / device SVGs via the hidden attribute.
+   Some browsers (WebKit) do not apply the UA [hidden] style to inline SVG, so
+   make it explicit. */
+#theme-toggle svg[hidden] {
+  display: none;
+}
+
 /* ── App body layout ─────────────────────────────────────────────────────── */
 
 .app-body {

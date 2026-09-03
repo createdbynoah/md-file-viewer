@@ -404,9 +404,11 @@ function setTheme(mode) {
     ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css'
     : 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css';
 
-  themeIconSun.hidden = mode !== 'light';
-  themeIconMoon.hidden = mode !== 'dark';
-  themeIconDevice.hidden = mode !== 'device';
+  // SVG elements have no `hidden` IDL property (HTMLElement only), so toggle
+  // the attribute directly.
+  themeIconSun.toggleAttribute('hidden', mode !== 'light');
+  themeIconMoon.toggleAttribute('hidden', mode !== 'dark');
+  themeIconDevice.toggleAttribute('hidden', mode !== 'device');
 
   const next = THEME_MODES[(THEME_MODES.indexOf(mode) + 1) % THEME_MODES.length];
   const label = `Theme: ${THEME_LABELS[mode]} (click for ${THEME_LABELS[next]})`;
