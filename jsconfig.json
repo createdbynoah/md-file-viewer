@@ -11,5 +11,6 @@
     "strict": false,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.js", "scripts/**/*.mjs"]
+  "include": ["src/**/*.js", "scripts/**/*.mjs"],
+  "exclude": ["src/**/*.test.js", "src/test-utils/**"]
 }

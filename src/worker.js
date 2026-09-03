@@ -45,6 +45,8 @@ async function verifySignedCookie(cookieValue, secret) {
 
 // ── History helpers ─────────────────────────────────────────────────────────
 
+const HISTORY_MAX = 100;
+
 async function readHistory(kv) {
   const data = await kv.get('history');
   if (!data) return [];
@@ -64,6 +66,7 @@ async function addHistoryEntry(kv, entry) {
   const history = await readHistory(kv);
   const filtered = history.filter((h) => h.id !== entry.id);
   filtered.unshift({ ...entry, viewedAt: now });
+  if (filtered.length > HISTORY_MAX) filtered.length = HISTORY_MAX;
   // Update lastAccessedAt in metadata (authoritative timestamp for retention)
   const metaKey = `meta:${entry.id}`;
   const metaJson = await kv.get(metaKey);
