@@ -21,11 +21,13 @@ No test framework is configured. No linter is configured.
 **Backend:** Single Hono app in `src/worker.js` — all API routes in one file. Runs as a Cloudflare Worker.
 
 **Frontend:** Vanilla JS SPA in `public/` — no build step, no bundler. Static assets served via Workers Static Assets from the `public/` directory.
+
 - `public/index.html` — full HTML structure (login screen + app screen, toggled via `hidden` attribute)
 - `public/js/app.js` — all client logic (auth, file upload, paste, history, markdown rendering)
 - `public/css/style.css` — CSS custom properties for light/dark theming
 
 **Storage bindings** (configured in `wrangler.jsonc`):
+
 - `MD_FILES` — R2 bucket, stores raw markdown as `{uuid}.md`
 - `HISTORY` — KV namespace, stores `history` (JSON array, max 100 entries) and `meta:{uuid}` (per-file metadata)
 
@@ -35,20 +37,20 @@ No test framework is configured. No linter is configured.
 
 All routes are prefixed with `/api/`. Auth-protected unless noted:
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/auth/login` | Login (unprotected) |
-| GET | `/api/auth/check` | Check auth status (unprotected) |
-| POST | `/api/auth/logout` | Logout |
-| POST | `/api/upload` | Upload `.md` file (multipart form) |
-| POST | `/api/paste` | Save pasted markdown (JSON body) |
-| GET | `/api/files` | List all files |
-| GET | `/api/files/:id` | Get file content |
-| PATCH  | `/api/files/:id` | Rename file |
-| DELETE | `/api/files/:id` | Delete file |
-| GET | `/api/history` | Get view history |
-| DELETE | `/api/history` | Clear all history |
-| DELETE | `/api/history/:id` | Remove single history entry |
+| Method | Path               | Purpose                            |
+| ------ | ------------------ | ---------------------------------- |
+| POST   | `/api/auth/login`  | Login (unprotected)                |
+| GET    | `/api/auth/check`  | Check auth status (unprotected)    |
+| POST   | `/api/auth/logout` | Logout                             |
+| POST   | `/api/upload`      | Upload `.md` file (multipart form) |
+| POST   | `/api/paste`       | Save pasted markdown (JSON body)   |
+| GET    | `/api/files`       | List all files                     |
+| GET    | `/api/files/:id`   | Get file content                   |
+| PATCH  | `/api/files/:id`   | Rename file                        |
+| DELETE | `/api/files/:id`   | Delete file                        |
+| GET    | `/api/history`     | Get view history                   |
+| DELETE | `/api/history`     | Clear all history                  |
+| DELETE | `/api/history/:id` | Remove single history entry        |
 
 ## CI/CD
 

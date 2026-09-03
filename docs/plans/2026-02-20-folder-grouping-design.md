@@ -46,15 +46,15 @@ Both the folder's `fileIds` array and the file's `folderId` are kept in sync (de
 
 All auth-protected. Added under `/api/folders`:
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/folders` | List all folders with member file metadata |
-| POST | `/api/folders` | Create a folder (body: `{ name }`) |
-| PATCH | `/api/folders/:id` | Rename a folder (body: `{ name }`) |
-| DELETE | `/api/folders/:id` | Delete folder + all contained files from R2 and KV |
-| POST | `/api/folders/:id/files` | Add file to folder (body: `{ fileId }`) |
-| DELETE | `/api/folders/:id/files/:fileId` | Remove file from folder (returns to flat list) |
-| POST | `/api/folders/:id/files/:fileId/move` | Move file to different folder (body: `{ targetFolderId }`) |
+| Method | Path                                  | Purpose                                                    |
+| ------ | ------------------------------------- | ---------------------------------------------------------- |
+| GET    | `/api/folders`                        | List all folders with member file metadata                 |
+| POST   | `/api/folders`                        | Create a folder (body: `{ name }`)                         |
+| PATCH  | `/api/folders/:id`                    | Rename a folder (body: `{ name }`)                         |
+| DELETE | `/api/folders/:id`                    | Delete folder + all contained files from R2 and KV         |
+| POST   | `/api/folders/:id/files`              | Add file to folder (body: `{ fileId }`)                    |
+| DELETE | `/api/folders/:id/files/:fileId`      | Remove file from folder (returns to flat list)             |
+| POST   | `/api/folders/:id/files/:fileId/move` | Move file to different folder (body: `{ targetFolderId }`) |
 
 ### `GET /api/folders` response shape
 
@@ -96,23 +96,29 @@ All auth-protected. Added under `/api/folders`:
 ## Interactions
 
 ### Creating a folder
+
 Click `[+]` button -> inline text input appears in the folders section -> type name -> Enter to confirm, Escape to cancel.
 
 ### Drag and drop (desktop)
+
 - Drag a history item onto a folder to add it
 - Drag a file from one folder to another to move it
 - Drag a file out of a folder onto the "History" heading to unfile it
 
 ### Context menu (mobile + desktop)
+
 - Hover/long-press on a file in a folder -> "Move to folder" (submenu), "Remove from folder"
 - Hover/long-press on a folder -> "Rename", "Delete"
 
 ### Viewer toolbar
+
 New folder icon button next to existing delete/copy buttons:
+
 - Click -> dropdown showing available folders + "New folder" + "Remove from folder" (if currently filed)
 - Selecting a folder moves the currently viewed file there
 
 ### History section
+
 - Files that belong to a folder still appear in History when viewed
 - A small folder icon badge indicates the file is in a folder
 - Clicking a filed item in history opens the file normally
@@ -120,6 +126,7 @@ New folder icon button next to existing delete/copy buttons:
 ## Retention Exemption
 
 The `runRetention()` cron is modified to check `folderId` on each file's metadata:
+
 - If `folderId` is present and the folder still exists -> skip archiving and deletion
 - If `folderId` references a deleted folder -> treat as unfiled (subject to normal retention)
 

@@ -2,6 +2,17 @@ import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { createLogger } from './logger.js';
 
+/**
+ * @typedef {object} Env
+ * @property {R2Bucket} MD_FILES
+ * @property {KVNamespace} HISTORY
+ * @property {Fetcher} ASSETS
+ * @property {string} ACCESS_PASSWORD
+ * @property {string} COOKIE_SECRET
+ * @property {string} [LOG_LEVEL]
+ */
+
+/** @type {Hono<{ Bindings: Env, Variables: { logger: ReturnType<typeof createLogger> } }>} */
 const app = new Hono();
 
 // ── Web Crypto auth helpers ─────────────────────────────────────────────────
@@ -13,7 +24,7 @@ async function signValue(value, secret) {
     encoder.encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
-    ['sign'],
+    ['sign']
   );
   const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -62,7 +73,9 @@ async function addHistoryEntry(kv, entry) {
       meta.lastAccessedAt = now;
       delete meta.archivedAt;
       await kv.put(metaKey, JSON.stringify(meta));
-    } catch { /* leave metadata unchanged on parse error */ }
+    } catch {
+      /* leave metadata unchanged on parse error */
+    }
   }
   await writeHistory(kv, filtered);
 }
@@ -99,7 +112,9 @@ async function listAllMeta(kv) {
       if (!metaJson) continue;
       try {
         result.set(key.name.slice(5), JSON.parse(metaJson));
-      } catch { /* skip corrupt */ }
+      } catch {
+        /* skip corrupt */
+      }
     }
     if (list.list_complete) break;
     cursor = list.cursor;
@@ -118,7 +133,9 @@ async function getMetaMany(kv, ids) {
     if (!values[i]) return;
     try {
       result.set(id, JSON.parse(values[i]));
-    } catch { /* skip corrupt */ }
+    } catch {
+      /* skip corrupt */
+    }
   });
   return result;
 }
@@ -166,7 +183,10 @@ async function runRetention(env, log) {
   if (deletedIds.length > 0) {
     const deleted = new Set(deletedIds);
     const history = await readHistory(env.HISTORY);
-    await writeHistory(env.HISTORY, history.filter((h) => !deleted.has(h.id)));
+    await writeHistory(
+      env.HISTORY,
+      history.filter((h) => !deleted.has(h.id))
+    );
   }
 
   log.info('retention.run', { archived: archivedCount, deleted: deletedIds.length });
@@ -258,13 +278,16 @@ app.post('/api/upload', async (c) => {
   const now = new Date().toISOString();
 
   await c.env.MD_FILES.put(`${id}.md`, content);
-  await c.env.HISTORY.put(`meta:${id}`, JSON.stringify({
-    filename: originalName,
-    source: 'upload',
-    size: content.length,
-    created: now,
-    lastAccessedAt: now,
-  }));
+  await c.env.HISTORY.put(
+    `meta:${id}`,
+    JSON.stringify({
+      filename: originalName,
+      source: 'upload',
+      size: content.length,
+      created: now,
+      lastAccessedAt: now,
+    })
+  );
   await addHistoryEntry(c.env.HISTORY, { id, filename: originalName, source: 'upload' });
 
   const log = c.get('logger');
@@ -286,13 +309,16 @@ app.post('/api/paste', async (c) => {
   const now = new Date().toISOString();
 
   await c.env.MD_FILES.put(`${id}.md`, content);
-  await c.env.HISTORY.put(`meta:${id}`, JSON.stringify({
-    filename: displayName,
-    source: 'paste',
-    size: content.length,
-    created: now,
-    lastAccessedAt: now,
-  }));
+  await c.env.HISTORY.put(
+    `meta:${id}`,
+    JSON.stringify({
+      filename: displayName,
+      source: 'paste',
+      size: content.length,
+      created: now,
+      lastAccessedAt: now,
+    })
+  );
   await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source: 'paste' });
 
   const log = c.get('logger');
@@ -347,7 +373,9 @@ app.get('/api/files/:id', async (c) => {
       displayName = meta.filename || displayName;
       source = meta.source || source;
       created = meta.created || null;
-    } catch { /* use defaults */ }
+    } catch {
+      /* use defaults */
+    }
   }
 
   await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source });
@@ -382,9 +410,7 @@ app.patch('/api/files/:id', async (c) => {
   await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
 
   const history = await readHistory(c.env.HISTORY);
-  const updated = history.map((h) =>
-    h.id === id ? { ...h, filename: trimmed } : h
-  );
+  const updated = history.map((h) => (h.id === id ? { ...h, filename: trimmed } : h));
   await writeHistory(c.env.HISTORY, updated);
 
   const log = c.get('logger');
@@ -402,7 +428,10 @@ app.delete('/api/files/:id', async (c) => {
   await c.env.HISTORY.delete(`meta:${id}`);
 
   const history = await readHistory(c.env.HISTORY);
-  await writeHistory(c.env.HISTORY, history.filter((h) => h.id !== id));
+  await writeHistory(
+    c.env.HISTORY,
+    history.filter((h) => h.id !== id)
+  );
 
   const folders = await readFolders(c.env.HISTORY);
   let foldersChanged = false;
@@ -423,7 +452,10 @@ app.delete('/api/files/:id', async (c) => {
 
 app.get('/api/history', async (c) => {
   const history = await readHistory(c.env.HISTORY);
-  const allMeta = await getMetaMany(c.env.HISTORY, history.map((h) => h.id));
+  const allMeta = await getMetaMany(
+    c.env.HISTORY,
+    history.map((h) => h.id)
+  );
 
   return c.json(
     history
@@ -434,7 +466,7 @@ app.get('/api/history', async (c) => {
       .map((h) => {
         const meta = allMeta.get(h.id);
         return { ...h, folderId: meta?.folderId || null };
-      }),
+      })
   );
 });
 
@@ -448,7 +480,10 @@ app.delete('/api/history', async (c) => {
 app.delete('/api/history/:id', async (c) => {
   const id = c.req.param('id');
   const history = await readHistory(c.env.HISTORY);
-  await writeHistory(c.env.HISTORY, history.filter((h) => h.id !== id));
+  await writeHistory(
+    c.env.HISTORY,
+    history.filter((h) => h.id !== id)
+  );
   const log = c.get('logger');
   log.info('history.remove', { entryId: id });
   return c.json({ success: true });
@@ -458,7 +493,10 @@ app.delete('/api/history/:id', async (c) => {
 
 app.get('/api/folders', async (c) => {
   const folders = await readFolders(c.env.HISTORY);
-  const allMeta = await getMetaMany(c.env.HISTORY, folders.flatMap((f) => f.fileIds));
+  const allMeta = await getMetaMany(
+    c.env.HISTORY,
+    folders.flatMap((f) => f.fileIds)
+  );
 
   const enriched = folders.map((folder) => ({
     id: folder.id,
@@ -530,10 +568,16 @@ app.delete('/api/folders/:id', async (c) => {
   if (folder.fileIds.length > 0) {
     const deleted = new Set(folder.fileIds);
     const history = await readHistory(c.env.HISTORY);
-    await writeHistory(c.env.HISTORY, history.filter((h) => !deleted.has(h.id)));
+    await writeHistory(
+      c.env.HISTORY,
+      history.filter((h) => !deleted.has(h.id))
+    );
   }
 
-  await writeFolders(c.env.HISTORY, folders.filter((f) => f.id !== id));
+  await writeFolders(
+    c.env.HISTORY,
+    folders.filter((f) => f.id !== id)
+  );
 
   const log = c.get('logger');
   log.info('folder.delete', { folderId: id, fileCount: folder.fileIds.length });
@@ -584,7 +628,9 @@ app.delete('/api/folders/:id/files/:fileId', async (c) => {
       const meta = JSON.parse(metaJson);
       delete meta.folderId;
       await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-    } catch { /* ignore corrupt meta */ }
+    } catch {
+      /* ignore corrupt meta */
+    }
   }
 
   return c.json({ success: true });
@@ -611,7 +657,9 @@ app.post('/api/folders/:id/files/:fileId/move', async (c) => {
       const meta = JSON.parse(metaJson);
       meta.folderId = targetFolderId;
       await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-    } catch { /* ignore corrupt meta */ }
+    } catch {
+      /* ignore corrupt meta */
+    }
   }
 
   return c.json({ success: true });

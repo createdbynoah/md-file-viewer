@@ -76,7 +76,6 @@ const viewerScroll = document.querySelector('.viewer-scroll');
 
 let foldersData = [];
 let currentFileId = null;
-let currentFileSource = null;
 let currentRawMarkdown = null;
 let currentFilename = null;
 
@@ -192,10 +191,7 @@ async function pollSidebar() {
 // Returns null when the response was discarded as stale.
 async function refreshSidebar(reason) {
   const seq = ++sidebarFetchSeq;
-  const [historyRes, foldersRes] = await Promise.all([
-    api('/api/history'),
-    api('/api/folders'),
-  ]);
+  const [historyRes, foldersRes] = await Promise.all([api('/api/history'), api('/api/folders')]);
   const history = await historyRes.json();
   const folders = await foldersRes.json();
 
@@ -255,7 +251,9 @@ const SHORT_ID_LENGTH = 25;
 const UUID_LIMIT = 1n << 128n;
 
 function uuidToShortId(uuid) {
-  return BigInt('0x' + uuid.replace(/-/g, '')).toString(36).padStart(SHORT_ID_LENGTH, '0');
+  return BigInt('0x' + uuid.replace(/-/g, ''))
+    .toString(36)
+    .padStart(SHORT_ID_LENGTH, '0');
 }
 
 function shortIdToUuid(shortId) {
@@ -400,9 +398,10 @@ function setTheme(mode) {
 
   const resolved = resolveTheme(mode);
   document.documentElement.setAttribute('data-theme', resolved);
-  hljsThemeLink.href = resolved === 'dark'
-    ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css'
-    : 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css';
+  hljsThemeLink.href =
+    resolved === 'dark'
+      ? 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css'
+      : 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css';
 
   // SVG elements have no `hidden` IDL property (HTMLElement only), so toggle
   // the attribute directly.
@@ -465,7 +464,10 @@ function createFolderBadgeSvg() {
   svg.setAttribute('stroke', 'currentColor');
   svg.setAttribute('stroke-width', '2');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z');
+  path.setAttribute(
+    'd',
+    'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'
+  );
   svg.appendChild(path);
   return svg;
 }
@@ -658,10 +660,17 @@ function renderFolderList(folders) {
       if (!fileId) return;
 
       if (sourceFolderId && sourceFolderId !== folder.id) {
-        await api('/api/folders/' + encodeURIComponent(sourceFolderId) + '/files/' + encodeURIComponent(fileId) + '/move', {
-          method: 'POST',
-          body: JSON.stringify({ targetFolderId: folder.id }),
-        });
+        await api(
+          '/api/folders/' +
+            encodeURIComponent(sourceFolderId) +
+            '/files/' +
+            encodeURIComponent(fileId) +
+            '/move',
+          {
+            method: 'POST',
+            body: JSON.stringify({ targetFolderId: folder.id }),
+          }
+        );
       } else if (!sourceFolderId) {
         await api('/api/folders/' + encodeURIComponent(folder.id) + '/files', {
           method: 'POST',
@@ -701,7 +710,13 @@ function renderFolderList(folders) {
         removeBtn.title = 'Remove from folder';
         removeBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          await api('/api/folders/' + encodeURIComponent(folder.id) + '/files/' + encodeURIComponent(file.id), { method: 'DELETE' });
+          await api(
+            '/api/folders/' +
+              encodeURIComponent(folder.id) +
+              '/files/' +
+              encodeURIComponent(file.id),
+            { method: 'DELETE' }
+          );
           syncSidebar('folder-file-remove');
         });
 
@@ -742,7 +757,10 @@ createFolderBtn.addEventListener('click', () => {
   }
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      save();
+    }
     if (e.key === 'Escape') li.remove();
   });
   input.addEventListener('blur', save);
@@ -774,8 +792,13 @@ function startFolderRename(folder, nameEl) {
   }
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
-    if (e.key === 'Escape') { input.replaceWith(nameEl); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      save();
+    }
+    if (e.key === 'Escape') {
+      input.replaceWith(nameEl);
+    }
   });
   input.addEventListener('blur', save);
 }
@@ -812,7 +835,13 @@ function renderFolderDropdown() {
     removeOpt.className = 'folder-dropdown-item';
     removeOpt.textContent = 'Remove from folder';
     removeOpt.addEventListener('click', async () => {
-      await api('/api/folders/' + encodeURIComponent(currentFolderId) + '/files/' + encodeURIComponent(currentFileId), { method: 'DELETE' });
+      await api(
+        '/api/folders/' +
+          encodeURIComponent(currentFolderId) +
+          '/files/' +
+          encodeURIComponent(currentFileId),
+        { method: 'DELETE' }
+      );
       folderDropdown.hidden = true;
       syncSidebar('folder-unassign');
     });
@@ -850,7 +879,10 @@ function renderFolderDropdown() {
   newFolderOpt.addEventListener('click', async () => {
     const name = prompt('Folder name:');
     if (!name || !name.trim()) return;
-    const res = await api('/api/folders', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+    const res = await api('/api/folders', {
+      method: 'POST',
+      body: JSON.stringify({ name: name.trim() }),
+    });
     if (res.ok) {
       const folder = await res.json();
       await api('/api/folders/' + encodeURIComponent(folder.id) + '/files', {
@@ -882,13 +914,16 @@ async function viewFile(id, { updateUrl = true } = {}) {
     currentRawMarkdown = data.content;
     renderMarkdown(data.content, data.filename, id);
     currentFileId = id;
-    currentFileSource = 'upload';
     deleteFileBtn.hidden = false;
     copyMdBtn.hidden = false;
     folderBtn.hidden = false;
     if (data.created) {
       const d = new Date(data.created);
-      viewerCreated.textContent = 'Created ' + d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) + ' at ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      viewerCreated.textContent =
+        'Created ' +
+        d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) +
+        ' at ' +
+        d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
       viewerCreated.hidden = false;
     } else {
       viewerCreated.hidden = true;
@@ -928,7 +963,9 @@ function addCodeCopyButtons() {
       const code = pre.querySelector('code');
       navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
       btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+      }, 1500);
     });
     wrapper.appendChild(btn);
   }
@@ -954,7 +991,6 @@ function showInputArea({ updateUrl = true } = {}) {
   viewerTitle.textContent = 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', 'false');
   currentFileId = null;
-  currentFileSource = null;
   currentRawMarkdown = null;
   currentFilename = null;
   copyMdBtn.hidden = true;
@@ -988,7 +1024,9 @@ copyMdBtn.addEventListener('click', () => {
   navigator.clipboard.writeText(currentRawMarkdown);
   const orig = copyMdBtn.textContent;
   copyMdBtn.textContent = 'Copied!';
-  setTimeout(() => { copyMdBtn.textContent = orig; }, 1500);
+  setTimeout(() => {
+    copyMdBtn.textContent = orig;
+  }, 1500);
 });
 
 deleteFileBtn.addEventListener('click', async () => {

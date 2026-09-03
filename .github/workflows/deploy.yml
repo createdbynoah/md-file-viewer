@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/**"
-      - "public/**"
-      - "wrangler.jsonc"
-      - "package.json"
-      - ".github/workflows/deploy.yml"
+      - 'src/**'
+      - 'public/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - '.github/workflows/deploy.yml'
 
 jobs:
   deploy:
