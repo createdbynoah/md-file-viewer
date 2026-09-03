@@ -95,6 +95,13 @@ body {
 #login-screen[hidden] { display: none; }
 #app-screen[hidden] { display: none; }
 
+#app-screen {
+  display: flex;
+  flex-direction: column;
+  /* Set from JS while reading a note: how far the topbar has scrolled away. */
+  --topbar-offset: 0px;
+}
+
 .login-card {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -179,9 +186,10 @@ body {
   padding: 0 16px;
   background: var(--bg);
   flex-shrink: 0;
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 20;
+  /* Slides out of view as the note content scrolls (see updateTopbarOffset). */
+  margin-top: calc(-1 * var(--topbar-offset));
 }
 
 .topbar-left, .topbar-right {
@@ -247,7 +255,8 @@ body {
 
 .app-body {
   display: flex;
-  height: calc(100dvh - var(--topbar-height));
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -264,6 +273,12 @@ body {
   flex-direction: column;
   margin-left: calc(-1 * var(--sidebar-width));
   transition: margin-left 0.25s ease;
+}
+
+/* The sidebar itself is the only scroll container: folders and history
+   scroll together as one column. */
+.sidebar > * {
+  flex-shrink: 0;
 }
 
 .sidebar.open {
@@ -288,8 +303,6 @@ body {
 .history-list {
   list-style: none;
   padding: 0 8px 16px;
-  flex: 1;
-  overflow-y: auto;
 }
 
 .history-list li {
@@ -1007,7 +1020,7 @@ body {
 @media (max-width: 767px) {
   .sidebar {
     position: fixed;
-    top: var(--topbar-height);
+    top: calc(var(--topbar-height) - var(--topbar-offset));
     left: 0;
     bottom: 0;
     z-index: 30;
