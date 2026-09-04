@@ -4,14 +4,14 @@ md-file-viewer runs on Cloudflare Workers with R2 (file storage) and KV (history
 
 ## Architecture
 
-| Component          | Service               | Details                                         |
-| ------------------ | --------------------- | ----------------------------------------------- |
-| Server             | Cloudflare Worker     | Hono framework, `src/worker.js`                 |
-| Static assets      | Workers Static Assets | `public/` directory, served from edge CDN       |
-| File storage       | R2 bucket             | `md-file-viewer-files`, keyed as `{uuid}.md`    |
-| History + metadata | KV namespace          | `history` key (JSON array) + `meta:{uuid}` keys |
-| Auth               | Web Crypto API        | HMAC-SHA256 signed cookies                      |
-| Secrets            | Wrangler secrets      | `ACCESS_PASSWORD`, `COOKIE_SECRET`              |
+| Component          | Service               | Details                                                      |
+| ------------------ | --------------------- | ------------------------------------------------------------ |
+| Server             | Cloudflare Worker     | Hono framework, `src/worker.js`                              |
+| Static assets      | Workers Static Assets | `public/` directory, served from edge CDN                    |
+| File storage       | R2 bucket             | `md-file-viewer-files`, keyed as `{uuid}.md`                 |
+| History + metadata | KV namespace          | `history` key (JSON array) + `meta:{uuid}` keys              |
+| Auth               | Cloudflare Access     | Zero Trust app on `/api/auth/login`; Worker verifies the JWT |
+| Config vars        | `wrangler.jsonc` vars | `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN`                           |
 
 ## Prerequisites
 
@@ -43,18 +43,30 @@ The KV command outputs a namespace ID. Update `wrangler.jsonc` with it:
 ]
 ```
 
-### 2. Set secrets
+### 2. Create the Cloudflare Access application
 
-```bash
-npx wrangler secret put ACCESS_PASSWORD
-npx wrangler secret put COOKIE_SECRET
-```
+Zero Trust (free plan, up to 50 users) issues the login session; the Worker only verifies it.
 
-`ACCESS_PASSWORD` is the login password for the app. `COOKIE_SECRET` is used to sign auth cookies — generate one with:
+1. Cloudflare dashboard → Zero Trust → Access → Applications → **Add an application** → Self-hosted.
+2. Application domain: `notebook.noahcancode.com`, path: `api/auth/login`. **Only this path is gated**; every other path (including shared note links) is served by the Worker directly.
+3. Identity providers: enable Google and GitHub under Zero Trust → Settings → Authentication (One-time PIN optional). Select them on the application.
+4. Policy: name `allow-users`, action **Allow**, include rule **Everyone** (or restrict by email). Session duration: 1 month.
+5. Save, then open the application → Overview and copy the **Application Audience (AUD) Tag**.
+6. Put the AUD and your team domain (`<team>.cloudflareaccess.com`, from Zero Trust → Settings → Custom Pages) into `wrangler.jsonc` `vars`:
 
-```bash
-openssl rand -base64 32
-```
+   "ACCESS_AUD": "<aud tag>",
+   "ACCESS_TEAM_DOMAIN": "<team>.cloudflareaccess.com",
+
+   These are not secrets; commit them.
+
+7. Delete the legacy secrets once the new build is deployed:
+
+   ```bash
+   npx wrangler secret delete ACCESS_PASSWORD
+   npx wrangler secret delete COOKIE_SECRET
+   ```
+
+Until step 6 is deployed, the app returns 401 for everything except `/api/auth/*`.
 
 ### 3. Set up GitHub Actions
 
@@ -101,12 +113,11 @@ pnpm dev
 
 Wrangler emulates R2 and KV locally — no Cloudflare account needed for development. Local data is stored in `.wrangler/` (gitignored).
 
-Local secrets are read from `.dev.vars` (gitignored):
+Cloudflare Access cannot run locally, so plain `pnpm dev` is anonymous (read-only once
+step 2 of the auth design lands). Use `pnpm uat` for an authenticated stub session; send
+`X-Dev-User: <id>` to act as a different user. `.dev.vars` (gitignored) only needs:
 
-```
-ACCESS_PASSWORD=changeme
-COOKIE_SECRET=dev-secret-change-in-production
-```
+    LOG_LEVEL=debug
 
 ## Manual deployment
 

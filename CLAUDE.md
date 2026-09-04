@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-md-file-viewer is a password-protected Markdown file viewer running on Cloudflare Workers. Users can upload `.md` files or paste markdown text, which gets stored in R2 and rendered client-side with markdown-it + highlight.js.
+md-file-viewer is a Cloudflare Access-gated Markdown file viewer running on Cloudflare Workers. Users can upload `.md` files or paste markdown text, which gets stored in R2 and rendered client-side with markdown-it + highlight.js.
 
 ## Commands
 
@@ -37,30 +37,30 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 - `MD_FILES` — R2 bucket, stores raw markdown as `{uuid}.md`
 - `HISTORY` — KV namespace, stores `history` (JSON array, max 100 entries) and `meta:{uuid}` (per-file metadata)
 
-**Auth:** HMAC-SHA256 signed cookies via Web Crypto API. Middleware on `/api/*` checks the cookie, exempting `/api/auth/login` and `/api/auth/check`. Secrets `ACCESS_PASSWORD` and `COOKIE_SECRET` come from Wrangler secrets (production) or `.dev.vars` (local dev).
+**Auth:** Cloudflare Access (Zero Trust) gates only `/api/auth/login`. Every `/api/*` request runs `resolveUser()` which verifies the `CF_Authorization` cookie (or `Cf-Access-Jwt-Assertion` header) via `src/auth.js` against `ACCESS_AUD` / `ACCESS_TEAM_DOMAIN` (wrangler vars, not secrets) and sets `c.get('user')` to `{ id, email }` or `null`. Routes outside `/api/auth/*` 401 without a user. Design: `docs/plans/2026-09-04-auth-design.md`.
 
-**UAT stub:** `isDevEnv(env)` in `src/worker.js` is true only when `AUTH_STUB_USER` is set AND `ENVIRONMENT !== 'production'`. Then auth is bypassed and `/api/dev/seed` + `/api/dev/retention` are mounted; otherwise `/api/dev/*` is a 404 before auth. Only `scripts/uat.mjs` sets the stub (via `wrangler dev --env uat --var`). Guardrail: `src/dev.integration.test.js`. When real auth lands, keep the stub short-circuit in front of the new verifier.
+**UAT stub:** `isDevEnv(env)` in `src/worker.js` is true only when `AUTH_STUB_USER` is set AND `ENVIRONMENT !== 'production'`. Then auth is bypassed and `/api/dev/seed` + `/api/dev/retention` are mounted; otherwise `/api/dev/*` is a 404 before auth. Only `scripts/uat.mjs` sets the stub (via `wrangler dev --env uat --var`). Guardrail: `src/dev.integration.test.js`. When real auth lands, keep the stub short-circuit in front of the new verifier. Under the stub, `X-Dev-User: <id>` switches identity (integration tests use `asUser()` from `src/test-utils/app.js`); the header is ignored outside `isDevEnv`.
 
 ## API Routes
 
 All routes are prefixed with `/api/`. Auth-protected unless noted:
 
-| Method | Path                 | Purpose                            |
-| ------ | -------------------- | ---------------------------------- |
-| POST   | `/api/auth/login`    | Login (unprotected)                |
-| GET    | `/api/auth/check`    | Check auth status (unprotected)    |
-| POST   | `/api/auth/logout`   | Logout                             |
-| POST   | `/api/upload`        | Upload `.md` file (multipart form) |
-| POST   | `/api/paste`         | Save pasted markdown (JSON body)   |
-| GET    | `/api/files`         | List all files                     |
-| GET    | `/api/files/:id`     | Get file content                   |
-| PATCH  | `/api/files/:id`     | Rename file                        |
-| DELETE | `/api/files/:id`     | Delete file                        |
-| GET    | `/api/history`       | Get view history                   |
-| DELETE | `/api/history`       | Clear all history                  |
-| DELETE | `/api/history/:id`   | Remove single history entry        |
-| POST   | `/api/dev/seed`      | UAT only: reset + seed scenarios   |
-| POST   | `/api/dev/retention` | UAT only: run retention cron now   |
+| Method | Path                 | Purpose                                                |
+| ------ | -------------------- | ------------------------------------------------------ |
+| GET    | `/api/auth/login`    | Access-gated; upserts user, redirects (unprotected)    |
+| GET    | `/api/auth/check`    | `{ authenticated, user }` (unprotected)                |
+| POST   | `/api/auth/logout`   | Clears cookie, returns Access logout URL (unprotected) |
+| POST   | `/api/upload`        | Upload `.md` file (multipart form)                     |
+| POST   | `/api/paste`         | Save pasted markdown (JSON body)                       |
+| GET    | `/api/files`         | List all files                                         |
+| GET    | `/api/files/:id`     | Get file content                                       |
+| PATCH  | `/api/files/:id`     | Rename file                                            |
+| DELETE | `/api/files/:id`     | Delete file                                            |
+| GET    | `/api/history`       | Get view history                                       |
+| DELETE | `/api/history`       | Clear all history                                      |
+| DELETE | `/api/history/:id`   | Remove single history entry                            |
+| POST   | `/api/dev/seed`      | UAT only: reset + seed scenarios                       |
+| POST   | `/api/dev/retention` | UAT only: run retention cron now                       |
 
 ## CI/CD
 
