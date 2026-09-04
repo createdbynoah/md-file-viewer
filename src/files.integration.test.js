@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { authed, json, makeEnv, paste, clearAll } from './test-utils/app.js';
+import { authed, json, devEnv, paste, clearAll } from './test-utils/app.js';
 
 describe('files', () => {
   beforeEach(() => clearAll());
 
   it('paste stores content, meta and history', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const id = await paste('# Hi', 'Note A', env);
     expect(await (await env.MD_FILES.get(`${id}.md`)).text()).toBe('# Hi');
     const meta = JSON.parse(await env.HISTORY.get(`meta:${id}`));
@@ -37,7 +37,7 @@ describe('files', () => {
   });
 
   it('lists non-archived files and hides archived ones', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const a = await paste('a', 'A', env);
     const b = await paste('b', 'B', env);
     const meta = JSON.parse(await env.HISTORY.get(`meta:${b}`));
@@ -49,7 +49,7 @@ describe('files', () => {
   });
 
   it('get returns content, records history, and refreshes lastAccessedAt', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const id = await paste('body', 'T', env);
     const stale = JSON.parse(await env.HISTORY.get(`meta:${id}`));
     stale.lastAccessedAt = '2000-01-01T00:00:00.000Z';
@@ -71,7 +71,7 @@ describe('files', () => {
   });
 
   it('rename updates meta and history; validates input', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const id = await paste('x', 'Old', env);
     expect(
       (await authed(`/api/files/${id}`, json({ filename: '  ' }, { method: 'PATCH' }), env)).status
@@ -90,7 +90,7 @@ describe('files', () => {
   });
 
   it('delete removes R2 object, meta, history entry and folder refs', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const id = await paste('x', 'D', env);
     await env.HISTORY.put(
       'folders',

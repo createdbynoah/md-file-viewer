@@ -25,8 +25,8 @@ export default defineConfig({
                 r2Buckets: ['MD_FILES'],
                 kvNamespaces: ['HISTORY'],
                 bindings: {
-                  ACCESS_PASSWORD: 'test-password',
-                  COOKIE_SECRET: 'test-cookie-secret',
+                  ACCESS_AUD: 'test-aud',
+                  ACCESS_TEAM_DOMAIN: 'test.cloudflareaccess.com',
                   LOG_LEVEL: 'error',
                 },
               },

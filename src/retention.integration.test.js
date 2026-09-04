@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { makeEnv, paste, runScheduled, clearAll } from './test-utils/app.js';
+import { devEnv, paste, runScheduled, clearAll } from './test-utils/app.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const daysAgo = (n) => new Date(Date.now() - n * DAY).toISOString();
@@ -16,7 +16,7 @@ describe('retention cron', () => {
   beforeEach(() => clearAll());
 
   it('archives after 30 days, deletes after 60, leaves fresh files alone', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const fresh = await paste('f', 'Fresh', env);
     const old = await paste('o', 'Old', env);
     const ancient = await paste('a', 'Ancient', env);
@@ -36,7 +36,7 @@ describe('retention cron', () => {
   });
 
   it('exempts files in an existing folder and clears stale folder refs', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const inFolder = await paste('i', 'In', env);
     const stale = await paste('s', 'Stale', env);
     await env.HISTORY.put(
@@ -55,7 +55,7 @@ describe('retention cron', () => {
   });
 
   it('is idempotent: does not re-stamp archivedAt', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const id = await paste('x', 'X', env);
     await setAccessed(env, id, 31, { archivedAt: '2001-01-01T00:00:00.000Z' });
     await runScheduled(env);

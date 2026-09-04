@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { authed, makeEnv, paste, clearAll } from './test-utils/app.js';
+import { authed, devEnv, paste, clearAll } from './test-utils/app.js';
 
 describe('history', () => {
   beforeEach(() => clearAll());
 
   it('dedupes by id and orders most-recent first', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const a = await paste('a', 'A', env);
     const b = await paste('b', 'B', env);
     await authed(`/api/files/${a}`, {}, env);
@@ -15,7 +15,7 @@ describe('history', () => {
   });
 
   it('caps at 100 entries', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const seed = Array.from({ length: 100 }, (_, i) => ({
       id: `old-${i}`,
       filename: `o${i}`,
@@ -31,7 +31,7 @@ describe('history', () => {
   });
 
   it('hides entries whose meta is missing or archived', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const a = await paste('a', 'A', env);
     const b = await paste('b', 'B', env);
     await env.HISTORY.delete(`meta:${a}`);
@@ -42,7 +42,7 @@ describe('history', () => {
   });
 
   it('removes a single entry and clears all', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const a = await paste('a', 'A', env);
     const b = await paste('b', 'B', env);
     await authed(`/api/history/${a}`, { method: 'DELETE' }, env);
