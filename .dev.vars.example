@@ -1,0 +1,3 @@
+# Local dev (pnpm dev). Access cannot run locally, so plain `pnpm dev` is
+# anonymous. Use `pnpm uat` for an authenticated stub session.
+LOG_LEVEL=debug
