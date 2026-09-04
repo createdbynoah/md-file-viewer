@@ -117,8 +117,15 @@ async function upsertUser(kv, user) {
 
 /** Only allow same-origin absolute paths as a post-login destination. */
 function safeNext(raw) {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return '/';
-  return raw;
+  if (!raw) return '/';
+  let u;
+  try {
+    u = new URL(raw, 'http://x');
+  } catch {
+    return '/';
+  }
+  if (u.origin !== 'http://x' || !u.pathname.startsWith('/')) return '/';
+  return u.pathname + u.search;
 }
 
 // ── KV metadata scan helper ─────────────────────────────────────────────────

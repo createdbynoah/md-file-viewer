@@ -8,7 +8,7 @@ description: Use when verifying frontend behavior of md-file-viewer in a real br
 Use this to confirm UI behavior in a real browser rather than in tests. It composes
 the auth stub, the dev seed, and `pnpm uat`.
 
-The app is password-protected (and will move to a real auth provider). `pnpm uat`
+The app is gated by Cloudflare Access (Zero Trust on `/api/auth/login`). `pnpm uat`
 sidesteps login entirely: the Worker runs with `AUTH_STUB_USER=user_local_dev` under
 the `uat` wrangler environment, so `/api/auth/check` reports authenticated and the SPA
 opens straight into the app.

@@ -51,22 +51,26 @@ Zero Trust (free plan, up to 50 users) issues the login session; the Worker only
 2. Application domain: `notebook.noahcancode.com`, path: `api/auth/login`. **Only this path is gated**; every other path (including shared note links) is served by the Worker directly.
 3. Identity providers: enable Google and GitHub under Zero Trust → Settings → Authentication (One-time PIN optional). Select them on the application.
 4. Policy: name `allow-users`, action **Allow**, include rule **Everyone** (or restrict by email). Session duration: 1 month.
-5. Save, then open the application → Overview and copy the **Application Audience (AUD) Tag**.
-6. Put the AUD and your team domain (`<team>.cloudflareaccess.com`, from Zero Trust → Settings → Custom Pages) into `wrangler.jsonc` `vars`:
+5. Cookie settings (application → Settings → Cookies): **SameSite Attribute** `Lax` and **HTTP Only** on. `CF_Authorization` replaces the old `SameSite=Lax` `auth` cookie, and Lax is what keeps cross-site POSTs from riding the session.
+6. Save, then open the application → Overview and copy the **Application Audience (AUD) Tag**.
+7. Put the AUD and your team domain (`<team>.cloudflareaccess.com`, from Zero Trust → Settings → Custom Pages) into `wrangler.jsonc` `vars`:
 
    "ACCESS_AUD": "<aud tag>",
    "ACCESS_TEAM_DOMAIN": "<team>.cloudflareaccess.com",
 
    These are not secrets; commit them.
 
-7. Delete the legacy secrets once the new build is deployed:
+8. Delete the legacy secrets once the new build is deployed:
 
    ```bash
    npx wrangler secret delete ACCESS_PASSWORD
    npx wrangler secret delete COOKIE_SECRET
    ```
 
-Until step 6 is deployed, the app returns 401 for everything except `/api/auth/*`.
+Until step 7 is deployed, the app returns 401 for everything except `/api/auth/*`.
+
+Note: logout clears the app's `CF_Authorization` cookie but not the team-domain SSO session, so a
+following "Sign in" often skips the identity-provider chooser and signs the same user straight back in.
 
 ### 3. Set up GitHub Actions
 

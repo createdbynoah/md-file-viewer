@@ -130,6 +130,34 @@ describe('auth (Cloudflare Access)', () => {
     expect(bad.headers.get('location')).toBe('/');
     const proto = await call('/api/auth/login?next=//evil.example', { headers: cookieFor(t) });
     expect(proto.headers.get('location')).toBe('/');
+    const tab = await call('/api/auth/login?next=/%09//evil.example', { headers: cookieFor(t) });
+    expect(tab.status).toBe(302);
+    expect(tab.headers.get('location')).toBe('/');
+    const lf = await call('/api/auth/login?next=/%0A//evil.example', { headers: cookieFor(t) });
+    expect(lf.status).toBe(302);
+    expect(lf.headers.get('location')).toBe('/');
+  });
+
+  it('401s a valid token when ACCESS_AUD is unset', async () => {
+    const res = await call(
+      '/api/files',
+      { headers: cookieFor(await mint()) },
+      makeEnv({ ACCESS_AUD: '' })
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('prefers the assertion header over the cookie', async () => {
+    const expired = await mint({ exp: Math.floor(Date.now() / 1000) - 5 });
+    const valid = await mint();
+    const headerWins = await call('/api/files', {
+      headers: { ...cookieFor(expired), 'cf-access-jwt-assertion': valid },
+    });
+    expect(headerWins.status).toBe(200);
+    const headerLoses = await call('/api/files', {
+      headers: { ...cookieFor(valid), 'cf-access-jwt-assertion': expired },
+    });
+    expect(headerLoses.status).toBe(401);
   });
 
   it('login without a valid token still redirects home', async () => {
