@@ -148,41 +148,24 @@ body {
   margin-bottom: 24px;
 }
 
-#login-form {
+.login-actions {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  justify-content: center;
 }
 
-#login-form input {
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  background: var(--bg);
-  color: var(--text);
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-#login-form input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-
-#login-form button {
-  padding: 10px 14px;
-  border: none;
+.login-button {
+  display: inline-block;
+  padding: 10px 24px;
   border-radius: var(--radius);
   background: var(--accent);
   color: #fff;
   font-size: 0.9375rem;
   font-weight: 500;
-  cursor: pointer;
+  text-decoration: none;
   transition: background 0.15s;
 }
 
-#login-form button:hover {
+.login-button:hover {
   background: var(--accent-hover);
 }
 
