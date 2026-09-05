@@ -41,6 +41,7 @@ describe('migrateToOwner', () => {
     expect(r1).toEqual({
       stamped: 2,
       skipped: 1,
+      missing: 0,
       indexed: 2,
       movedHistory: true,
       movedFolders: true,
@@ -62,6 +63,7 @@ describe('migrateToOwner', () => {
     expect(r2).toEqual({
       stamped: 0,
       skipped: 3,
+      missing: 0,
       indexed: 0,
       movedHistory: false,
       movedFolders: false,
@@ -98,5 +100,47 @@ describe('migrateToOwner', () => {
     await migrateToOwner(kv, OWNER);
     expect(await readJson(env, `user:${OWNER}:notes`)).toEqual(['new', 'old']);
     expect((await readJson(env, `history:${OWNER}`)).map((h) => h.id)).toEqual(['new', 'old']);
+  });
+  it('re-run self-heals: meta already stamped but missing from the index gets indexed', async () => {
+    const env = makeEnv();
+    const kv = baseEnv.HISTORY;
+    await kv.put(
+      'meta:x',
+      JSON.stringify({
+        filename: 'X',
+        ownerId: OWNER,
+        visibility: 'link',
+        created: '2026-05-01T00:00:00.000Z',
+      })
+    );
+    await kv.put('meta:y', legacyMeta('Y', '2026-06-01T00:00:00.000Z'));
+    const r = await migrateToOwner(kv, OWNER);
+    expect(r).toMatchObject({ stamped: 1, skipped: 1, missing: 0, indexed: 2 });
+    expect(await readJson(env, `user:${OWNER}:notes`)).toEqual(['y', 'x']);
+  });
+
+  it('aborts before any write when a per-user read fails', async () => {
+    const kv = baseEnv.HISTORY;
+    await kv.put('meta:a', legacyMeta('A', '2026-01-01T00:00:00.000Z'));
+    await kv.put(
+      'history',
+      JSON.stringify([{ id: 'a', filename: 'A', viewedAt: '2026-01-02T00:00:00.000Z' }])
+    );
+    let failed = false;
+    const flaky = {
+      list: (o) => kv.list(o),
+      put: (k, v) => kv.put(k, v),
+      delete: (k) => kv.delete(k),
+      get: async (k) => {
+        if (k === `history:${OWNER}` && !failed) {
+          failed = true;
+          throw new Error('transient');
+        }
+        return kv.get(k);
+      },
+    };
+    await expect(migrateToOwner(flaky, OWNER)).rejects.toThrow('transient');
+    expect(await kv.get('history')).not.toBeNull();
+    expect(await kv.get(`history:${OWNER}`)).toBeNull();
   });
 });

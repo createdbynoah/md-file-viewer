@@ -29,20 +29,38 @@ async function listKeys(kv, prefix) {
 }
 
 /**
+ * Any error thrown by the kv adapter propagates: a failed read must abort the
+ * run rather than be mistaken for an absent key, because the legacy singleton
+ * keys are deleted right after their per-user counterpart is written.
+ *
  * @param {{ list: Function, get: Function, put: Function, delete: Function }} kv
  * @param {string} ownerId  the operator's Access `sub`
  * @param {{ log?: (msg: string, data?: object) => void }} [opts]
  */
 export async function migrateToOwner(kv, ownerId, { log = () => {} } = {}) {
   if (!ownerId) throw new Error('ownerId is required');
-  const result = { stamped: 0, skipped: 0, indexed: 0, movedHistory: false, movedFolders: false };
+  const result = {
+    stamped: 0,
+    skipped: 0,
+    missing: 0,
+    indexed: 0,
+    movedHistory: false,
+    movedFolders: false,
+  };
 
-  // 1. Stamp legacy meta.
-  const stamped = []; // { id, created }
+  // 1. Stamp legacy meta. `owned` collects EVERY note that belongs to ownerId
+  // once this pass is done — stamped just now or stamped by an earlier,
+  // interrupted run — so step 2 can rebuild the index from scratch and heal a
+  // run that died between stamping and writing the index.
+  const owned = []; // { id, created }
   for (const key of await listKeys(kv, 'meta:')) {
     const id = key.slice(5);
     const raw = await kv.get(key);
-    if (!raw) continue;
+    if (!raw) {
+      result.missing++;
+      log('skip missing meta', { id });
+      continue;
+    }
     let meta;
     try {
       meta = JSON.parse(raw);
@@ -52,6 +70,7 @@ export async function migrateToOwner(kv, ownerId, { log = () => {} } = {}) {
     }
     if (meta.ownerId) {
       result.skipped++;
+      if (meta.ownerId === ownerId) owned.push({ id, created: meta.created || '' });
       continue;
     }
     meta.ownerId = ownerId;
@@ -59,20 +78,23 @@ export async function migrateToOwner(kv, ownerId, { log = () => {} } = {}) {
     meta.editors = [];
     meta.currentRev = 0;
     await kv.put(key, JSON.stringify(meta));
-    stamped.push({ id, created: meta.created || '' });
+    owned.push({ id, created: meta.created || '' });
     result.stamped++;
     log('stamped', { id });
   }
 
-  // 2. Owner index: existing first, then stamped ids newest-created first.
-  if (stamped.length) {
+  // 2. Owner index: existing order first, then every other owned id
+  // newest-created first. `indexed` counts only the ids newly added.
+  if (owned.length) {
     const indexKey = `user:${ownerId}:notes`;
     const existing = (await readArray(kv, indexKey)) || [];
     const have = new Set(existing);
-    stamped.sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0));
-    const added = stamped.map((s) => s.id).filter((id) => !have.has(id));
-    await kv.put(indexKey, JSON.stringify([...existing, ...added]));
-    result.indexed = added.length;
+    owned.sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0));
+    const added = owned.map((s) => s.id).filter((id) => !have.has(id));
+    if (added.length) {
+      await kv.put(indexKey, JSON.stringify([...existing, ...added]));
+      result.indexed = added.length;
+    }
   }
 
   // 3. Legacy history → history:{owner} (existing per-user entries stay first).
@@ -81,10 +103,13 @@ export async function migrateToOwner(kv, ownerId, { log = () => {} } = {}) {
     const key = `history:${ownerId}`;
     const current = (await readArray(kv, key)) || [];
     const seen = new Set(current.map((h) => h.id));
-    const merged = [...current, ...legacyHistory.filter((h) => h && !seen.has(h.id))].slice(
-      0,
-      HISTORY_MAX
-    );
+    const combined = [...current, ...legacyHistory.filter((h) => h && !seen.has(h.id))];
+    const merged = combined.slice(0, HISTORY_MAX);
+    if (combined.length > merged.length) {
+      log(
+        `history: dropped ${combined.length - merged.length} legacy entries (cap ${HISTORY_MAX})`
+      );
+    }
     await kv.put(key, JSON.stringify(merged));
     await kv.delete('history');
     result.movedHistory = true;
