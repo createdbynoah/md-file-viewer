@@ -92,7 +92,7 @@ Then run it for real:
 pnpm migrate:owner <your-sub>
 ```
 
-Idempotent and self-healing — safe to re-run. Before its first write, the real run backs up `history`, `folders`, and every `meta:*` key to `.migrate-backup/<timestamp>.json` (gitignored). It prints `{ stamped, skipped, missing, indexed, movedHistory, movedFolders }`. Existing notes become `link`-visible (today's behaviour); new notes default to `private`. Until this runs, old notes are readable by any signed-in user and editable by nobody. Add `--local` to target the local `wrangler dev` store instead of `--remote` (the default).
+Idempotent and self-healing — safe to re-run. Before its first write, the real run backs up `history`, `folders`, `user:<sub>:notes`, `history:<sub>`, `folders:<sub>`, and every `meta:*` key to `.migrate-backup/<timestamp>.json` (gitignored). It prints `{ stamped, skipped, missing, indexed, movedHistory, movedFolders }`. Existing notes become `link`-visible (today's behaviour); new notes default to `private`. Until this runs, old notes are readable by any signed-in user and editable by nobody. Add `--local` to target the local `wrangler dev` store instead of `--remote` (the default). Run this promptly after the deploy: until it does, the sidebar is empty and old share links 404 for anonymous visitors, and because the CLI spawns one `wrangler` process per key (~1-2 s each), a few hundred notes takes several minutes.
 
 ### 4. Set up GitHub Actions
 
