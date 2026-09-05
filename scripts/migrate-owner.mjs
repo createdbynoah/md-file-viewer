@@ -9,7 +9,10 @@
 // Find your sub: sign in once, then `wrangler kv key list --binding HISTORY --remote --prefix user:`.
 //
 // Before the first write of a real run the CLI dumps every key it could touch
-// (`history`, `folders`, all `meta:*`) to .migrate-backup/<timestamp>.json.
+// (`history`, `folders`, `user:<sub>:notes`, `history:<sub>`, `folders:<sub>` and
+// all `meta:*`) to .migrate-backup/<timestamp>.json. A wrangler `get` failure is
+// treated as a genuine miss only for wrangler's own not-found shapes; every other
+// failure (auth, 429, 5xx) propagates and aborts the run.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -55,8 +58,11 @@ const raw = {
       // shaped failure means absent; anything else (auth, 5xx, network) must
       // propagate — swallowing it would make the module overwrite a per-user
       // key with partial data and then delete the legacy source.
+      // Match only wrangler's own miss shapes — its remote 404 line embeds the
+      // account/namespace ids and the key name, so a loose /404/ would also
+      // match a 429/5xx on a key that merely contains "404".
       const detail = `${err?.stdout ?? ''}\n${err?.stderr ?? ''}`;
-      if (/not found|10009|404/i.test(detail)) return null;
+      if (/ - 404: |^Value not found$|\b10009\b/m.test(detail)) return null;
       throw err;
     }
     const value = out.replace(/\n$/, '');
@@ -80,8 +86,15 @@ const raw = {
  * Dumps every key the migration could touch, as raw strings, so a bad run can
  * be restored by hand. Called lazily, once, immediately before the first write.
  */
-async function backup() {
-  const dump = { history: await raw.get('history'), folders: await raw.get('folders'), meta: {} };
+async function backup(owner) {
+  const dump = {
+    history: await raw.get('history'),
+    folders: await raw.get('folders'),
+    [`user:${owner}:notes`]: await raw.get(`user:${owner}:notes`),
+    [`history:${owner}`]: await raw.get(`history:${owner}`),
+    [`folders:${owner}`]: await raw.get(`folders:${owner}`),
+    meta: {},
+  };
   for (const { name } of (await raw.list({ prefix: 'meta:' })).keys) {
     dump.meta[name] = await raw.get(name);
   }
@@ -98,7 +111,7 @@ let backedUp = false;
 async function beforeWrite() {
   if (backedUp) return;
   backedUp = true;
-  await backup();
+  await backup(ownerId);
 }
 
 const kv = {

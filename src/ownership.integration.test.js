@@ -168,4 +168,60 @@ describe('ownership + visibility', () => {
     expect((await (await authed('/api/history', {}, env)).json())[0].folderId).toBe(f.id);
     expect((await (await authed('/api/history', bob, env)).json())[0].folderId).toBeNull();
   });
+  it('touchMeta: non-owner and anonymous reads never rewrite lastAccessedAt', async () => {
+    const env = alice();
+    const id = await paste('shared', 'L', env);
+    await setVisibility(env, id, 'link');
+    const meta = await readJson(env, `meta:${id}`);
+    meta.lastAccessedAt = '2000-01-01T00:00:00.000Z';
+    await env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+
+    expect((await authed(`/api/files/${id}`, bob, env)).status).toBe(200);
+    expect((await readJson(env, `meta:${id}`)).lastAccessedAt).toBe('2000-01-01T00:00:00.000Z');
+    expect((await call(`/api/files/${id}`)).status).toBe(200);
+    expect((await readJson(env, `meta:${id}`)).lastAccessedAt).toBe('2000-01-01T00:00:00.000Z');
+  });
+
+  it('touchMeta: owner read refreshes a stale timestamp and un-archives', async () => {
+    const env = alice();
+    const id = await paste('x', 'X', env);
+    const stale = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const meta = await readJson(env, `meta:${id}`);
+    await env.HISTORY.put(
+      `meta:${id}`,
+      JSON.stringify({ ...meta, lastAccessedAt: stale, archivedAt: stale })
+    );
+
+    await authed(`/api/files/${id}`, {}, env);
+    const after = await readJson(env, `meta:${id}`);
+    expect(after.lastAccessedAt).not.toBe(stale);
+    expect(after.archivedAt).toBeUndefined();
+  });
+
+  it('touchMeta: a second owner read minutes later does not rewrite', async () => {
+    const env = alice();
+    const id = await paste('x', 'X', env);
+    const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const meta = await readJson(env, `meta:${id}`);
+    await env.HISTORY.put(`meta:${id}`, JSON.stringify({ ...meta, lastAccessedAt: recent }));
+
+    await authed(`/api/files/${id}`, {}, env);
+    expect((await readJson(env, `meta:${id}`)).lastAccessedAt).toBe(recent);
+  });
+
+  it('folder delete skips a foreign note planted in the folder', async () => {
+    const env = alice();
+    const id = await paste('x', 'X', env);
+    await env.HISTORY.put(
+      'folders:bob',
+      JSON.stringify([
+        { id: 'f-bob', name: 'B', fileIds: [id], created: '2026-01-01T00:00:00.000Z' },
+      ])
+    );
+    const res = await authed('/api/folders/f-bob', { method: 'DELETE', ...bob }, env);
+    expect(res.status).toBe(200);
+    expect(await env.MD_FILES.get(`${id}.md`)).not.toBeNull();
+    expect(await readJson(env, `meta:${id}`)).not.toBeNull();
+    expect((await readJson(env, 'folders:bob')).some((f) => f.id === 'f-bob')).toBe(false);
+  });
 });

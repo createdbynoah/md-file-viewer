@@ -119,7 +119,7 @@ describe('migrateToOwner', () => {
     expect(await readJson(env, `user:${OWNER}:notes`)).toEqual(['y', 'x']);
   });
 
-  it('aborts before any write when a per-user read fails', async () => {
+  it('propagates a failed per-user read and leaves legacy history intact', async () => {
     const kv = baseEnv.HISTORY;
     await kv.put('meta:a', legacyMeta('A', '2026-01-01T00:00:00.000Z'));
     await kv.put(

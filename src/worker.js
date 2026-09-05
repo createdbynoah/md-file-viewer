@@ -59,13 +59,21 @@ async function addHistoryEntry(kv, userId, entry) {
   await writeHistory(kv, userId, filtered);
 }
 
-/** Refresh lastAccessedAt (authoritative timestamp for retention) and un-archive. */
+const TOUCH_THROTTLE_MS = 60 * 60 * 1000;
+
+/**
+ * Refresh lastAccessedAt (authoritative timestamp for retention) and un-archive.
+ * Throttled: a meta touched within the last hour and not archived is left alone,
+ * so a read never writes back a copy of a meta that may already be stale.
+ */
 async function touchMeta(kv, id) {
   const metaKey = `meta:${id}`;
   const metaJson = await kv.get(metaKey);
   if (!metaJson) return;
   try {
     const meta = JSON.parse(metaJson);
+    const last = Date.parse(meta.lastAccessedAt);
+    if (!meta.archivedAt && Number.isFinite(last) && Date.now() - last < TOUCH_THROTTLE_MS) return;
     meta.lastAccessedAt = new Date().toISOString();
     delete meta.archivedAt;
     await kv.put(metaKey, JSON.stringify(meta));
@@ -508,7 +516,9 @@ app.get('/api/files/:id', async (c) => {
   const content = await object.text();
   const displayName = meta.filename || `${id}.md`;
 
-  await touchMeta(c.env.HISTORY, id);
+  // Owner-only: a non-owner read must never rewrite meta (a stale read-back
+  // could undo a just-made visibility change under KV eventual consistency).
+  if (isOwner(meta, user)) await touchMeta(c.env.HISTORY, id);
   if (user) {
     await addHistoryEntry(c.env.HISTORY, user.id, {
       id,
