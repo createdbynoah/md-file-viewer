@@ -123,6 +123,7 @@
               <line x1="12" y1="17" x2="12" y2="21" />
             </svg>
           </button>
+          <a id="topbar-signin" class="text-btn" href="/api/auth/login" hidden>Sign in</a>
           <button id="logout-btn" class="icon-btn" aria-label="Logout">
             <svg
               width="20"
@@ -175,6 +176,7 @@
             <button id="clear-history-btn" class="text-btn">Clear</button>
           </div>
           <ul id="history-list" class="history-list"></ul>
+          <div class="sidebar-footer"><span id="user-email" class="user-email"></span></div>
         </aside>
 
         <!-- Main content -->
@@ -219,7 +221,9 @@
                   <div id="folder-dropdown" class="folder-dropdown" hidden></div>
                 </div>
                 <button id="copy-md-btn" class="text-btn" hidden>Copy Markdown</button>
-                <button id="delete-file-btn" class="text-btn danger">Delete</button>
+                <button id="visibility-btn" class="text-btn" hidden></button>
+                <button id="copy-link-btn" class="text-btn" hidden>Copy link</button>
+                <button id="delete-file-btn" class="text-btn danger" hidden>Delete</button>
               </div>
             </div>
             <div class="viewer-scroll">

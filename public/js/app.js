@@ -69,6 +69,10 @@ const createFolderBtn = document.getElementById('create-folder-btn');
 const folderBtn = document.getElementById('folder-btn');
 const folderDropdown = document.getElementById('folder-dropdown');
 const viewerCreated = document.getElementById('viewer-created');
+const topbarSignin = document.getElementById('topbar-signin');
+const visibilityBtn = document.getElementById('visibility-btn');
+const copyLinkBtn = document.getElementById('copy-link-btn');
+const userEmail = document.getElementById('user-email');
 const topbar = document.querySelector('.topbar');
 const viewerScroll = document.querySelector('.viewer-scroll');
 
@@ -313,10 +317,8 @@ async function api(path, opts = {}) {
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
-// currentUser isn't consumed elsewhere yet, but is set here so the /api/auth/check
-// response shape is handled in one place.
-// eslint-disable-next-line no-unused-vars
 let currentUser = null;
+let currentNote = null; // { id, owned, visibility }
 
 async function checkAuth() {
   try {
@@ -325,12 +327,35 @@ async function checkAuth() {
     currentUser = data.user || null;
     if (data.authenticated) {
       showApp();
-    } else {
-      showLogin();
+      return;
     }
+    const deepLinkId = getFileIdFromPath();
+    if (deepLinkId && (await tryLoadPublicFile(deepLinkId))) return;
+    showLogin();
   } catch {
     showLogin();
   }
+}
+
+// Anonymous visitor on a /<id> link: render read-only if the note is shared.
+// Uses plain fetch, not api(), so a 401/404 never bounces through showLogin().
+async function tryLoadPublicFile(id) {
+  const res = await fetch(`/api/files/${encodeURIComponent(id)}`);
+  if (!res.ok) return false;
+  const data = await res.json();
+  document.body.classList.add('read-only');
+  loginScreen.hidden = true;
+  appScreen.hidden = false;
+  logoutBtn.hidden = true;
+  topbarSignin.hidden = false;
+  topbarSignin.href = `/api/auth/login?next=${encodeURIComponent(location.pathname)}`;
+  currentRawMarkdown = data.content;
+  currentNote = { id, owned: false, visibility: data.visibility };
+  renderMarkdown(data.content, data.filename, null);
+  copyMdBtn.hidden = false;
+  applyOwnerControls();
+  if (location.pathname !== filePath(id)) history.replaceState(null, '', filePath(id));
+  return true;
 }
 
 function showLogin() {
@@ -343,6 +368,10 @@ function showLogin() {
 }
 
 function showApp() {
+  userEmail.textContent = currentUser ? currentUser.email : '';
+  logoutBtn.hidden = false;
+  topbarSignin.hidden = true;
+  document.body.classList.remove('read-only');
   loginScreen.hidden = true;
   appScreen.hidden = false;
   syncSidebar('init');
@@ -906,11 +935,11 @@ async function viewFile(id, { updateUrl = true } = {}) {
     if (!res.ok) return;
     const data = await res.json();
     currentRawMarkdown = data.content;
-    renderMarkdown(data.content, data.filename, id);
+    renderMarkdown(data.content, data.filename, data.owned ? id : null);
     currentFileId = id;
-    deleteFileBtn.hidden = false;
+    currentNote = { id, owned: Boolean(data.owned), visibility: data.visibility || 'private' };
     copyMdBtn.hidden = false;
-    folderBtn.hidden = false;
+    applyOwnerControls();
     if (data.created) {
       const d = new Date(data.created);
       viewerCreated.textContent =
@@ -929,6 +958,42 @@ async function viewFile(id, { updateUrl = true } = {}) {
     syncSidebar('view-file');
   } catch {}
 }
+
+// Owner-only controls: delete, folder, visibility. Copy-link only when shared.
+function applyOwnerControls() {
+  const owned = Boolean(currentNote && currentNote.owned);
+  deleteFileBtn.hidden = !owned;
+  folderBtn.hidden = !owned;
+  visibilityBtn.hidden = !owned;
+  copyLinkBtn.hidden = !(currentNote && currentNote.visibility === 'link');
+  if (owned) {
+    visibilityBtn.textContent =
+      currentNote.visibility === 'link' ? 'Shared: anyone with link' : 'Private';
+    visibilityBtn.title = 'Click to toggle sharing';
+  }
+}
+
+visibilityBtn.addEventListener('click', async () => {
+  if (!currentNote || !currentNote.owned) return;
+  const visibility = currentNote.visibility === 'link' ? 'private' : 'link';
+  const res = await api(`/api/files/${encodeURIComponent(currentNote.id)}/visibility`, {
+    method: 'PATCH',
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) return;
+  currentNote.visibility = visibility;
+  applyOwnerControls();
+});
+
+copyLinkBtn.addEventListener('click', () => {
+  if (!currentNote) return;
+  navigator.clipboard.writeText(location.origin + filePath(currentNote.id));
+  const orig = copyLinkBtn.textContent;
+  copyLinkBtn.textContent = 'Copied!';
+  setTimeout(() => {
+    copyLinkBtn.textContent = orig;
+  }, 1500);
+});
 
 function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
@@ -987,8 +1052,12 @@ function showInputArea({ updateUrl = true } = {}) {
   currentFileId = null;
   currentRawMarkdown = null;
   currentFilename = null;
+  currentNote = null;
   copyMdBtn.hidden = true;
   folderBtn.hidden = true;
+  visibilityBtn.hidden = true;
+  copyLinkBtn.hidden = true;
+  deleteFileBtn.hidden = true;
   folderDropdown.hidden = true;
   viewerCreated.hidden = true;
   if (updateUrl) pushUrl('/');
