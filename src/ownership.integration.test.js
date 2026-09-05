@@ -120,4 +120,52 @@ describe('ownership + visibility', () => {
       (await authed(`/api/files/${id}`, json({ filename: 'N' }, { method: 'PATCH' }), env)).status
     ).toBe(404);
   });
+
+  it('folder move/remove cannot touch a note the caller does not own', async () => {
+    const env = alice();
+    const id = await paste('x', 'X', env);
+    const a = await (await authed('/api/folders', json({ name: 'A' }, bob), env)).json();
+    const b = await (await authed('/api/folders', json({ name: 'B' }, bob), env)).json();
+    const move = await authed(
+      `/api/folders/${a.id}/files/${id}/move`,
+      json({ targetFolderId: b.id }, bob),
+      env
+    );
+    expect(move.status).toBe(404);
+    const remove = await authed(
+      `/api/folders/${a.id}/files/${id}`,
+      { method: 'DELETE', ...bob },
+      env
+    );
+    expect(remove.status).toBe(404);
+    const folders = await (await authed('/api/folders', bob, env)).json();
+    expect(folders.flatMap((f) => f.files)).toEqual([]);
+    expect((await readJson(env, 'folders:bob')).flatMap((f) => f.fileIds)).toEqual([]);
+  });
+
+  it('GET /api/folders never enriches files the caller does not own', async () => {
+    const env = alice();
+    const id = await paste('x', 'X', env);
+    // simulate a stale/foreign id planted in bob's folder data
+    await env.HISTORY.put(
+      'folders:bob',
+      JSON.stringify([
+        { id: 'f-bob', name: 'B', fileIds: [id], created: '2026-01-01T00:00:00.000Z' },
+      ])
+    );
+    const folders = await (await authed('/api/folders', bob, env)).json();
+    expect(folders[0].files).toEqual([]);
+  });
+
+  it('history exposes folderId only to the owner', async () => {
+    const env = alice();
+    const id = await paste('x', 'X', env);
+    await setVisibility(env, id, 'link');
+    const f = await (await authed('/api/folders', json({ name: 'F' }), env)).json();
+    await authed(`/api/folders/${f.id}/files`, json({ fileId: id }), env);
+    await authed(`/api/files/${id}`, {}, env);
+    await authed(`/api/files/${id}`, bob, env);
+    expect((await (await authed('/api/history', {}, env)).json())[0].folderId).toBe(f.id);
+    expect((await (await authed('/api/history', bob, env)).json())[0].folderId).toBeNull();
+  });
 });

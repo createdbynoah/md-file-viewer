@@ -628,7 +628,7 @@ app.get('/api/history', async (c) => {
       })
       .map((h) => {
         const meta = allMeta.get(h.id);
-        return { ...h, folderId: meta?.folderId || null };
+        return { ...h, folderId: meta && isOwner(meta, user) ? meta.folderId || null : null };
       })
   );
 });
@@ -656,7 +656,8 @@ app.delete('/api/history/:id', async (c) => {
 // ── Folder routes ───────────────────────────────────────────────────────────
 
 app.get('/api/folders', async (c) => {
-  const folders = await readFolders(c.env.HISTORY, c.get('user').id);
+  const user = c.get('user');
+  const folders = await readFolders(c.env.HISTORY, user.id);
   const allMeta = await getMetaMany(
     c.env.HISTORY,
     folders.flatMap((f) => f.fileIds)
@@ -669,7 +670,7 @@ app.get('/api/folders', async (c) => {
     files: folder.fileIds
       .map((fid) => {
         const meta = allMeta.get(fid);
-        if (!meta) return null;
+        if (!meta || !isOwner(meta, user)) return null;
         return { id: fid, filename: meta.filename, source: meta.source, size: meta.size };
       })
       .filter(Boolean),
@@ -792,14 +793,16 @@ app.delete('/api/folders/:id/files/:fileId', async (c) => {
   const folder = folders.find((f) => f.id === folderId);
   if (!folder) return c.json({ error: 'Folder not found' }, 404);
 
+  const meta = await loadMeta(c.env.HISTORY, fileId);
+  if (!meta || !isOwner(meta, c.get('user'))) {
+    return c.json({ error: 'File not found' }, 404);
+  }
+
   folder.fileIds = folder.fileIds.filter((id) => id !== fileId);
   await writeFolders(c.env.HISTORY, c.get('user').id, folders);
 
-  const meta = await loadMeta(c.env.HISTORY, fileId);
-  if (meta && isOwner(meta, c.get('user'))) {
-    delete meta.folderId;
-    await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-  }
+  delete meta.folderId;
+  await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
 
   return c.json({ success: true });
 });
@@ -815,15 +818,17 @@ app.post('/api/folders/:id/files/:fileId/move', async (c) => {
   const target = folders.find((f) => f.id === targetFolderId);
   if (!source || !target) return c.json({ error: 'Folder not found' }, 404);
 
+  const meta = await loadMeta(c.env.HISTORY, fileId);
+  if (!meta || !isOwner(meta, c.get('user'))) {
+    return c.json({ error: 'File not found' }, 404);
+  }
+
   source.fileIds = source.fileIds.filter((id) => id !== fileId);
   if (!target.fileIds.includes(fileId)) target.fileIds.push(fileId);
   await writeFolders(c.env.HISTORY, c.get('user').id, folders);
 
-  const meta = await loadMeta(c.env.HISTORY, fileId);
-  if (meta && isOwner(meta, c.get('user'))) {
-    meta.folderId = targetFolderId;
-    await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-  }
+  meta.folderId = targetFolderId;
+  await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
 
   return c.json({ success: true });
 });
