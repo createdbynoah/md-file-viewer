@@ -66,3 +66,9 @@ export async function clearAll(env = makeEnv()) {
   const objs = await env.MD_FILES.list();
   await Promise.all(objs.objects.map((o) => env.MD_FILES.delete(o.key)));
 }
+
+/** Parse a KV JSON value, or null when the key is absent. */
+export async function readJson(env, key) {
+  const raw = await env.HISTORY.get(key);
+  return raw ? JSON.parse(raw) : null;
+}

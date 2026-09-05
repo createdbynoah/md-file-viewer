@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { authed, json, devEnv, paste, clearAll } from './test-utils/app.js';
+import { authed, json, devEnv, paste, clearAll, asUser } from './test-utils/app.js';
 
 describe('files', () => {
   beforeEach(() => clearAll());
@@ -10,7 +10,7 @@ describe('files', () => {
     expect(await (await env.MD_FILES.get(`${id}.md`)).text()).toBe('# Hi');
     const meta = JSON.parse(await env.HISTORY.get(`meta:${id}`));
     expect(meta).toMatchObject({ filename: 'Note A', source: 'paste', size: 4 });
-    const history = JSON.parse(await env.HISTORY.get('history'));
+    const history = JSON.parse(await env.HISTORY.get('history:user_local_dev'));
     expect(history[0]).toMatchObject({ id, filename: 'Note A' });
   });
 
@@ -55,14 +55,14 @@ describe('files', () => {
     stale.lastAccessedAt = '2000-01-01T00:00:00.000Z';
     stale.archivedAt = '2000-02-01T00:00:00.000Z';
     await env.HISTORY.put(`meta:${id}`, JSON.stringify(stale));
-    await env.HISTORY.put('history', '[]');
+    await env.HISTORY.put('history:user_local_dev', '[]');
 
     const res = await authed(`/api/files/${id}`, {}, env);
     expect(await res.json()).toMatchObject({ id, filename: 'T', content: 'body' });
     const meta = JSON.parse(await env.HISTORY.get(`meta:${id}`));
     expect(meta.lastAccessedAt > '2020').toBe(true);
     expect(meta.archivedAt).toBeUndefined();
-    const history = JSON.parse(await env.HISTORY.get('history'));
+    const history = JSON.parse(await env.HISTORY.get('history:user_local_dev'));
     expect(history[0].id).toBe(id);
   });
 
@@ -86,21 +86,61 @@ describe('files', () => {
     );
     expect(await res.json()).toEqual({ id, filename: 'New' });
     expect(JSON.parse(await env.HISTORY.get(`meta:${id}`)).filename).toBe('New');
-    expect(JSON.parse(await env.HISTORY.get('history'))[0].filename).toBe('New');
+    expect(JSON.parse(await env.HISTORY.get('history:user_local_dev'))[0].filename).toBe('New');
   });
 
   it('delete removes R2 object, meta, history entry and folder refs', async () => {
     const env = devEnv();
     const id = await paste('x', 'D', env);
     await env.HISTORY.put(
-      'folders',
+      'folders:user_local_dev',
       JSON.stringify([{ id: 'f-1', name: 'F', fileIds: [id], created: '' }])
     );
     const res = await authed(`/api/files/${id}`, { method: 'DELETE' }, env);
     expect(res.status).toBe(200);
     expect(await env.MD_FILES.get(`${id}.md`)).toBeNull();
     expect(await env.HISTORY.get(`meta:${id}`)).toBeNull();
-    expect(JSON.parse(await env.HISTORY.get('history'))).toEqual([]);
-    expect(JSON.parse(await env.HISTORY.get('folders'))[0].fileIds).toEqual([]);
+    expect(JSON.parse(await env.HISTORY.get('history:user_local_dev'))).toEqual([]);
+    expect(JSON.parse(await env.HISTORY.get('folders:user_local_dev'))[0].fileIds).toEqual([]);
+  });
+
+  it('paste stamps owner, private visibility and the owner index', async () => {
+    const env = devEnv();
+    const id = await paste('# Hi', 'Mine', env);
+    const meta = JSON.parse(await env.HISTORY.get(`meta:${id}`));
+    expect(meta).toMatchObject({
+      ownerId: 'user_local_dev',
+      visibility: 'private',
+      editors: [],
+      currentRev: 0,
+    });
+    expect(JSON.parse(await env.HISTORY.get('user:user_local_dev:notes'))).toEqual([id]);
+  });
+
+  it('upload stamps owner and index too', async () => {
+    const env = devEnv();
+    const form = new FormData();
+    form.append('file', new File(['# up'], 'doc.md', { type: 'text/markdown' }));
+    const { id } = await (await authed('/api/upload', { method: 'POST', body: form }, env)).json();
+    const meta = JSON.parse(await env.HISTORY.get(`meta:${id}`));
+    expect(meta).toMatchObject({ ownerId: 'user_local_dev', visibility: 'private' });
+    expect(JSON.parse(await env.HISTORY.get('user:user_local_dev:notes'))).toEqual([id]);
+  });
+
+  it('list returns only the caller’s notes, newest first', async () => {
+    const env = devEnv();
+    const a = await paste('a', 'A', env);
+    const b = await paste('b', 'B', env);
+    const bobRes = await authed(
+      '/api/paste',
+      json({ content: 'c', title: 'C' }, { headers: asUser('bob') }),
+      env
+    );
+    const c = (await bobRes.json()).id;
+
+    const mine = await (await authed('/api/files', {}, env)).json();
+    expect(mine.map((f) => f.id)).toEqual([b, a]);
+    const bobs = await (await authed('/api/files', { headers: asUser('bob') }, env)).json();
+    expect(bobs.map((f) => f.id)).toEqual([c]);
   });
 });

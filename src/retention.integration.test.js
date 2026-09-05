@@ -30,7 +30,7 @@ describe('retention cron', () => {
     expect(await env.MD_FILES.get(`${old}.md`)).not.toBeNull();
     expect(await env.HISTORY.get(`meta:${ancient}`)).toBeNull();
     expect(await env.MD_FILES.get(`${ancient}.md`)).toBeNull();
-    const history = JSON.parse(await env.HISTORY.get('history')).map((h) => h.id);
+    const history = JSON.parse(await env.HISTORY.get('history:user_local_dev')).map((h) => h.id);
     expect(history).toContain(old);
     expect(history).not.toContain(ancient);
   });
@@ -40,7 +40,7 @@ describe('retention cron', () => {
     const inFolder = await paste('i', 'In', env);
     const stale = await paste('s', 'Stale', env);
     await env.HISTORY.put(
-      'folders',
+      'folders:user_local_dev',
       JSON.stringify([{ id: 'f-live', name: 'L', fileIds: [inFolder], created: '' }])
     );
     await setAccessed(env, inFolder, 90, { folderId: 'f-live' });
