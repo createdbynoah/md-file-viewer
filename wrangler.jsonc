@@ -38,8 +38,8 @@
     "ENVIRONMENT": "production",
     // Cloudflare Access application (Zero Trust > Access > Applications).
     // Fill in after creating the app per docs/DEPLOYMENT.md. Not secrets.
-    "ACCESS_AUD": "",
-    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "e058d2efd575f343a4a5f6afdcfca400702124cefe076b9e51ed59ea570c4624",
+    "ACCESS_TEAM_DOMAIN": "noahcancode.cloudflareaccess.com",
   },
   // Built-in observability (Workers Logs)
   "observability": {
