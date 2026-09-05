@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { devEnv, paste, runScheduled, clearAll } from './test-utils/app.js';
+import { devEnv, paste, runScheduled, clearAll, authed, json } from './test-utils/app.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const daysAgo = (n) => new Date(Date.now() - n * DAY).toISOString();
@@ -62,5 +62,50 @@ describe('retention cron', () => {
     expect(JSON.parse(await env.HISTORY.get(`meta:${id}`)).archivedAt).toBe(
       '2001-01-01T00:00:00.000Z'
     );
+  });
+
+  it('folder exemption is per owner; deletion prunes owner history and index', async () => {
+    const env = devEnv();
+    const mine = await paste('m', 'Mine', env);
+    const bobsEnv = devEnv({ AUTH_STUB_USER: 'bob' });
+    const bobs = await paste('b', 'Bobs', bobsEnv);
+    // bob puts his note in a folder → exempt; mine is bare → deleted at 61d
+    const folder = await (await authed('/api/folders', json({ name: 'F' }), bobsEnv)).json();
+    await authed(`/api/folders/${folder.id}/files`, json({ fileId: bobs }), bobsEnv);
+    await setAccessed(env, mine, 61);
+    await setAccessed(env, bobs, 61);
+
+    await runScheduled(env);
+
+    expect(await env.HISTORY.get(`meta:${mine}`)).toBeNull();
+    expect(await env.HISTORY.get(`meta:${bobs}`)).not.toBeNull();
+    expect(JSON.parse(await env.HISTORY.get('user:user_local_dev:notes'))).toEqual([]);
+    expect(
+      JSON.parse(await env.HISTORY.get('history:user_local_dev')).map((h) => h.id)
+    ).not.toContain(mine);
+    expect(JSON.parse(await env.HISTORY.get('user:bob:notes'))).toEqual([bobs]);
+  });
+
+  it('skips legacy meta entirely when ownerId is missing', async () => {
+    const env = devEnv();
+    const id = 'legacy-1234';
+    await env.MD_FILES.put(`${id}.md`, 'legacy content');
+    await env.HISTORY.put(
+      `meta:${id}`,
+      JSON.stringify({
+        filename: 'Legacy.md',
+        source: 'upload',
+        size: 14,
+        created: daysAgo(90),
+        lastAccessedAt: daysAgo(61),
+      })
+    );
+
+    await runScheduled(env);
+
+    const meta = JSON.parse(await env.HISTORY.get(`meta:${id}`));
+    expect(meta).not.toBeNull();
+    expect(meta.archivedAt).toBeUndefined();
+    expect(await env.MD_FILES.get(`${id}.md`)).not.toBeNull();
   });
 });

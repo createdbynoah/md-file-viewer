@@ -266,6 +266,10 @@ async function runRetention(env, log) {
     const ref = meta.lastAccessedAt || meta.created;
     if (!ref) continue;
 
+    // Legacy notes without an owner are untouched until the owner migration
+    // stamps them — skip before any folderId stripping, archiving, or deletion.
+    if (!meta.ownerId) continue;
+
     const folderIds = await ownerFolderIds(meta.ownerId);
 
     // Skip files in valid folders (exempt from retention)
