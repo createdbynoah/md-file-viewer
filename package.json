@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "uat": "node scripts/uat.mjs",
-    "uat:stop": "node scripts/uat-stop.mjs"
+    "uat:stop": "node scripts/uat-stop.mjs",
+    "migrate:owner": "node scripts/migrate-owner.mjs"
   },
   "keywords": [],
   "author": "",
