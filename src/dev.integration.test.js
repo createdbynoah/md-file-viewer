@@ -36,12 +36,21 @@ describe('dev gate', () => {
     });
     const seed = await call('/api/dev/seed', { method: 'POST' }, env);
     expect(seed.status).toBe(200);
-    expect(await seed.json()).toMatchObject({ ok: true, notes: 9, folders: 3 });
+    expect(await seed.json()).toMatchObject({ ok: true, notes: 11, folders: 3 });
     const files = await (await call('/api/files', {}, env)).json();
-    // archived + expiring hidden
-    expect(files).toHaveLength(7);
+    expect(files).toHaveLength(7); // own, non-archived
     const folders = await (await call('/api/folders', {}, env)).json();
     expect(folders.map((f) => f.files.length)).toEqual([2, 1, 0]);
+    // second owner: link note readable by the stub user, private one is not
+    const { SEED_IDS } = await import('./seed.js');
+    expect((await call(`/api/files/${SEED_IDS.otherLink}`, {}, env)).status).toBe(200);
+    expect((await call(`/api/files/${SEED_IDS.otherPrivate}`, {}, env)).status).toBe(404);
+    const other = await (
+      await call('/api/files', { headers: { 'x-dev-user': 'other_user' } }, env)
+    ).json();
+    expect(other.map((f) => f.id).sort()).toEqual(
+      [SEED_IDS.otherLink, SEED_IDS.otherPrivate].sort()
+    );
   });
 
   it('seed is idempotent and retention can be triggered', async () => {

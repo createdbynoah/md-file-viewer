@@ -4,14 +4,14 @@ md-file-viewer runs on Cloudflare Workers with R2 (file storage) and KV (history
 
 ## Architecture
 
-| Component          | Service               | Details                                                      |
-| ------------------ | --------------------- | ------------------------------------------------------------ |
-| Server             | Cloudflare Worker     | Hono framework, `src/worker.js`                              |
-| Static assets      | Workers Static Assets | `public/` directory, served from edge CDN                    |
-| File storage       | R2 bucket             | `md-file-viewer-files`, keyed as `{uuid}.md`                 |
-| History + metadata | KV namespace          | `history` key (JSON array) + `meta:{uuid}` keys              |
-| Auth               | Cloudflare Access     | Zero Trust app on `/api/auth/login`; Worker verifies the JWT |
-| Config vars        | `wrangler.jsonc` vars | `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN`                           |
+| Component          | Service               | Details                                                                                |
+| ------------------ | --------------------- | -------------------------------------------------------------------------------------- |
+| Server             | Cloudflare Worker     | Hono framework, `src/worker.js`                                                        |
+| Static assets      | Workers Static Assets | `public/` directory, served from edge CDN                                              |
+| File storage       | R2 bucket             | `md-file-viewer-files`, keyed as `{uuid}.md`                                           |
+| History + metadata | KV namespace          | `meta:{uuid}`, `user:{sub}`, `user:{sub}:notes`, `history:{sub}`, `folders:{sub}` keys |
+| Auth               | Cloudflare Access     | Zero Trust app on `/api/auth/login`; Worker verifies the JWT                           |
+| Config vars        | `wrangler.jsonc` vars | `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN`                                                     |
 
 ## Prerequisites
 
@@ -72,7 +72,29 @@ Until step 7 is deployed, the app returns 401 for everything except `/api/auth/*
 Note: logout clears the app's `CF_Authorization` cookie but not the team-domain SSO session, so a
 following "Sign in" often skips the identity-provider chooser and signs the same user straight back in.
 
-### 3. Set up GitHub Actions
+### 3. Migrate existing notes to your account (one-time)
+
+After the first deploy with per-user storage, sign in once, then stamp every pre-existing note to your Access identity and move the old global history/folders keys to per-user keys:
+
+```bash
+pnpm exec wrangler kv key list --binding HISTORY --remote --prefix user:
+```
+
+Copy the id after `user:` (your Access `sub`), then rehearse read-only first:
+
+```bash
+pnpm migrate:owner <your-sub> --dry-run
+```
+
+Then run it for real:
+
+```bash
+pnpm migrate:owner <your-sub>
+```
+
+Idempotent and self-healing — safe to re-run. Before its first write, the real run backs up `history`, `folders`, `user:<sub>:notes`, `history:<sub>`, `folders:<sub>`, and every `meta:*` key to `.migrate-backup/<timestamp>.json` (gitignored). It prints `{ stamped, skipped, missing, indexed, movedHistory, movedFolders }`. Existing notes become `link`-visible (today's behaviour); new notes default to `private`. Until this runs, old notes are readable by any signed-in user and editable by nobody. Add `--local` to target the local `wrangler dev` store instead of `--remote` (the default). Run this promptly after the deploy: until it does, the sidebar is empty and old share links 404 for anonymous visitors, and because the CLI spawns one `wrangler` process per key (~1-2 s each), a few hundred notes takes several minutes.
+
+### 4. Set up GitHub Actions
 
 Add these as [repository secrets](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions) in your GitHub repo settings:
 
@@ -83,7 +105,7 @@ Add these as [repository secrets](https://docs.github.com/en/actions/security-fo
 
 To create an API token: Cloudflare dashboard > My Profile > API Tokens > Create Token > Use the "Edit Cloudflare Workers" template.
 
-### 4. Deploy
+### 5. Deploy
 
 ```bash
 pnpm run deploy
@@ -145,8 +167,11 @@ This runs `wrangler deploy`, which requires either:
 
 ### KV (history + metadata)
 
-- Key `history`: JSON array of `{ id, filename, source, viewedAt }` (max 100 entries)
-- Key `meta:{uuid}`: JSON object `{ filename, source, size, created }` for each file
+- Key `meta:{uuid}`: JSON object `{ filename, source, size, created, ownerId, visibility: 'private'|'link', editors, currentRev }` for each file. Legacy notes without `ownerId` (pre-migration) are readable by any signed-in user; run `pnpm migrate:owner` to stamp them.
+- Key `user:{sub}`: account record for an Access identity
+- Key `user:{sub}:notes`: JSON array of that owner's note ids, newest first — used for listing instead of a `meta:` prefix scan
+- Key `history:{sub}`: JSON array of `{ id, filename, source, viewedAt }` (max 100 entries), per user
+- Key `folders:{sub}`: per-user folder structure
 - KV is eventually consistent (reads may lag writes by a few seconds globally)
 
 ## Troubleshooting

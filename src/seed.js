@@ -15,7 +15,12 @@ export const SEED_IDS = {
   folderB1: '77777777-7777-4777-8777-777777777777',
   archived: '88888888-8888-4888-8888-888888888888',
   expiring: '99999999-9999-4999-8999-999999999999',
+  otherPrivate: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  otherLink: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
 };
+
+const OWNER = 'user_local_dev';
+const OTHER = 'other_user';
 
 const WIDE_TABLE = [
   '# Wide table',
@@ -69,13 +74,21 @@ const LONG = ['# Long note', '']
  * @param {string} id
  * @param {string} filename
  * @param {string} content
- * @param {{createdDays?: number, accessedDays?: number, source?: string, folderId?: string, archivedAt?: string}} [opts]
+ * @param {{createdDays?: number, accessedDays?: number, source?: string, folderId?: string, archivedAt?: string, ownerId?: string, visibility?: string}} [opts]
  */
 function note(
   id,
   filename,
   content,
-  { createdDays = 0, accessedDays = createdDays, source = 'paste', folderId, archivedAt } = {}
+  {
+    createdDays = 0,
+    accessedDays = createdDays,
+    source = 'paste',
+    folderId,
+    archivedAt,
+    ownerId = OWNER,
+    visibility = 'private',
+  } = {}
 ) {
   const meta = {
     filename,
@@ -83,6 +96,10 @@ function note(
     size: content.length,
     created: ago(createdDays),
     lastAccessedAt: ago(accessedDays),
+    ownerId,
+    visibility,
+    editors: [],
+    currentRev: 0,
   };
   if (folderId) meta.folderId = folderId;
   if (archivedAt) meta.archivedAt = archivedAt;
@@ -109,7 +126,7 @@ export async function seedScenarios(env) {
 
   const notes = [
     note(SEED_IDS.short, 'Short note.md', '# Hello\n\nA very short note.\n', { source: 'upload' }),
-    note(SEED_IDS.wide, 'Wide table', WIDE_TABLE, { createdDays: 1 }),
+    note(SEED_IDS.wide, 'Wide table', WIDE_TABLE, { createdDays: 1, visibility: 'link' }),
     note(SEED_IDS.code, 'Code blocks', CODE, { createdDays: 2 }),
     note(SEED_IDS.long, 'Long note', LONG, { createdDays: 8 }),
     note(SEED_IDS.folderA1, 'Alpha spec.md', '# Alpha spec\n\n- goal\n- scope\n', {
@@ -137,13 +154,28 @@ export async function seedScenarios(env) {
       accessedDays: 59,
       archivedAt: ago(29),
     }),
+    note(SEED_IDS.otherPrivate, 'Other private', '# Other\n\nPrivate to other_user.\n', {
+      ownerId: OTHER,
+    }),
+    note(SEED_IDS.otherLink, 'Other shared', '# Other\n\nShared by link.\n', {
+      ownerId: OTHER,
+      visibility: 'link',
+    }),
   ];
 
   for (const n of notes) {
     await env.MD_FILES.put(`${n.id}.md`, n.content);
     await env.HISTORY.put(`meta:${n.id}`, JSON.stringify(n.meta));
   }
-  await env.HISTORY.put('folders', JSON.stringify(folders));
+  await env.HISTORY.put(`folders:${OWNER}`, JSON.stringify(folders));
+
+  const notesByOwner = (ownerId) =>
+    notes
+      .filter((n) => n.meta.ownerId === ownerId)
+      .sort((a, b) => new Date(b.meta.created).getTime() - new Date(a.meta.created).getTime())
+      .map((n) => n.id);
+  await env.HISTORY.put(`user:${OWNER}:notes`, JSON.stringify(notesByOwner(OWNER)));
+  await env.HISTORY.put(`user:${OTHER}:notes`, JSON.stringify(notesByOwner(OTHER)));
 
   // History: today / yesterday / this week / older buckets, plus the archived one.
   const history = [
@@ -154,7 +186,7 @@ export async function seedScenarios(env) {
     { id: SEED_IDS.folderA1, filename: 'Alpha spec.md', source: 'upload', viewedAt: ago(10) },
     { id: SEED_IDS.archived, filename: 'Archived note', source: 'paste', viewedAt: ago(31) },
   ];
-  await env.HISTORY.put('history', JSON.stringify(history));
+  await env.HISTORY.put(`history:${OWNER}`, JSON.stringify(history));
 
   return { notes: notes.length, folders: folders.length, history: history.length };
 }

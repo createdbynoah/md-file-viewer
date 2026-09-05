@@ -35,17 +35,19 @@ The Worker serves both `/api/*` and the static SPA, so there is one process and 
 
 Fixed UUIDs (`src/seed.js` → `SEED_IDS`) so deep links are stable across re-seeds.
 
-| Note / folder                      | Use it to verify                                                          |
-| ---------------------------------- | ------------------------------------------------------------------------- |
-| **Short note.md** (upload)         | Basic render, upload badge, rename/delete                                 |
-| **Wide table**                     | `.table-wrapper` horizontal scroll, page must not scroll sideways         |
-| **Code blocks**                    | highlight.js themes (js/python/bash/no-lang), light + dark swap           |
-| **Long note**                      | Scroll container, sticky topbar, 60 sections                              |
-| **Project Alpha** folder (2 files) | Folder grouping, move/remove file, folder rename                          |
-| **Recipes** folder (1 file)        | Second folder for move targets                                            |
-| **Empty folder**                   | Empty-folder state                                                        |
-| **Archived note**                  | 31d idle + `archivedAt`: hidden from sidebar/history, still deep-linkable |
-| **Expiring note**                  | 59d idle: survives one retention run, deleted on the next                 |
+| Note / folder                               | Use it to verify                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------- |
+| **Short note.md** (upload)                  | Basic render, upload badge, rename/delete                                 |
+| **Wide table**                              | `.table-wrapper` horizontal scroll, page must not scroll sideways         |
+| **Code blocks**                             | highlight.js themes (js/python/bash/no-lang), light + dark swap           |
+| **Long note**                               | Scroll container, sticky topbar, 60 sections                              |
+| **Project Alpha** folder (2 files)          | Folder grouping, move/remove file, folder rename                          |
+| **Recipes** folder (1 file)                 | Second folder for move targets                                            |
+| **Empty folder**                            | Empty-folder state                                                        |
+| **Archived note**                           | 31d idle + `archivedAt`: hidden from sidebar/history, still deep-linkable |
+| **Expiring note**                           | 59d idle: survives one retention run, deleted on the next                 |
+| **Other private** (owner `other_user`)      | Private note owned by another user: 404 for the stub user                 |
+| **Other shared** (owner `other_user`, link) | Link-visibility note: readable by the stub user via direct link           |
 
 History is seeded across Today / Yesterday / This Week / Older buckets.
 

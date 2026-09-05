@@ -21,44 +21,100 @@ import { verifyAccessJwt } from './auth.js';
 /** @type {Hono<{ Bindings: Env, Variables: { logger: ReturnType<typeof createLogger>, user: User | null } }>} */
 const app = new Hono();
 
-// ── History helpers ─────────────────────────────────────────────────────────
+// ── Per-user key helpers ────────────────────────────────────────────────────
 
-const HISTORY_MAX = 100;
+const historyKey = (userId) => `history:${userId}`;
+const foldersKey = (userId) => `folders:${userId}`;
+const notesKey = (userId) => `user:${userId}:notes`;
 
-async function readHistory(kv) {
-  const data = await kv.get('history');
+async function readJsonArray(kv, key) {
+  const data = await kv.get(key);
   if (!data) return [];
   try {
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-async function writeHistory(kv, history) {
-  await kv.put('history', JSON.stringify(history));
+// ── History helpers (per user) ──────────────────────────────────────────────
+
+const HISTORY_MAX = 100;
+
+async function readHistory(kv, userId) {
+  return readJsonArray(kv, historyKey(userId));
 }
 
-async function addHistoryEntry(kv, entry) {
+async function writeHistory(kv, userId, history) {
+  await kv.put(historyKey(userId), JSON.stringify(history));
+}
+
+async function addHistoryEntry(kv, userId, entry) {
   const now = new Date().toISOString();
-  const history = await readHistory(kv);
+  const history = await readHistory(kv, userId);
   const filtered = history.filter((h) => h.id !== entry.id);
   filtered.unshift({ ...entry, viewedAt: now });
   if (filtered.length > HISTORY_MAX) filtered.length = HISTORY_MAX;
-  // Update lastAccessedAt in metadata (authoritative timestamp for retention)
-  const metaKey = `meta:${entry.id}`;
+  await writeHistory(kv, userId, filtered);
+}
+
+const TOUCH_THROTTLE_MS = 60 * 60 * 1000;
+
+/**
+ * Refresh lastAccessedAt (authoritative timestamp for retention) and un-archive.
+ * Throttled: a meta touched within the last hour and not archived is left alone,
+ * so a read never writes back a copy of a meta that may already be stale.
+ */
+async function touchMeta(kv, id) {
+  const metaKey = `meta:${id}`;
   const metaJson = await kv.get(metaKey);
-  if (metaJson) {
-    try {
-      const meta = JSON.parse(metaJson);
-      meta.lastAccessedAt = now;
-      delete meta.archivedAt;
-      await kv.put(metaKey, JSON.stringify(meta));
-    } catch {
-      /* leave metadata unchanged on parse error */
-    }
+  if (!metaJson) return;
+  try {
+    const meta = JSON.parse(metaJson);
+    const last = Date.parse(meta.lastAccessedAt);
+    if (!meta.archivedAt && Number.isFinite(last) && Date.now() - last < TOUCH_THROTTLE_MS) return;
+    meta.lastAccessedAt = new Date().toISOString();
+    delete meta.archivedAt;
+    await kv.put(metaKey, JSON.stringify(meta));
+  } catch {
+    /* leave metadata unchanged on parse error */
   }
-  await writeHistory(kv, filtered);
+}
+
+// ── Owner note index ────────────────────────────────────────────────────────
+// Authoritative list of a user's notes, newest first. Replaces prefix listing
+// (kv.list is eventually consistent and can lag behind a fresh write).
+
+async function readNoteIndex(kv, userId) {
+  return readJsonArray(kv, notesKey(userId));
+}
+
+async function addToNoteIndex(kv, userId, id) {
+  const ids = await readNoteIndex(kv, userId);
+  await kv.put(notesKey(userId), JSON.stringify([id, ...ids.filter((x) => x !== id)]));
+}
+
+async function removeFromNoteIndex(kv, userId, id) {
+  const ids = await readNoteIndex(kv, userId);
+  if (!ids.includes(id)) return;
+  await kv.put(notesKey(userId), JSON.stringify(ids.filter((x) => x !== id)));
+}
+
+/** Metadata for a freshly created note. */
+function newMeta({ filename, source, size, ownerId }) {
+  const now = new Date().toISOString();
+  return {
+    filename,
+    source,
+    size,
+    created: now,
+    lastAccessedAt: now,
+    ownerId,
+    visibility: 'private',
+    editors: [],
+    currentRev: 0,
+  };
 }
 
 // ── Folder helpers ──────────────────────────────────────────────────────────
@@ -67,18 +123,12 @@ function generateFolderId() {
   return 'f-' + crypto.randomUUID().slice(0, 8);
 }
 
-async function readFolders(kv) {
-  const data = await kv.get('folders');
-  if (!data) return [];
-  try {
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
+async function readFolders(kv, userId) {
+  return readJsonArray(kv, foldersKey(userId));
 }
 
-async function writeFolders(kv, folders) {
-  await kv.put('folders', JSON.stringify(folders));
+async function writeFolders(kv, userId, folders) {
+  await kv.put(foldersKey(userId), JSON.stringify(folders));
 }
 
 // ── User helpers ────────────────────────────────────────────────────────────
@@ -168,6 +218,35 @@ async function getMetaMany(kv, ids) {
   return result;
 }
 
+// ── Ownership / visibility ──────────────────────────────────────────────────
+
+async function loadMeta(kv, id) {
+  const raw = await kv.get(`meta:${id}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isOwner(meta, user) {
+  return Boolean(user && meta.ownerId && meta.ownerId === user.id);
+}
+
+/**
+ * link → anyone. private → owner. Legacy meta (no ownerId, pre-migration) →
+ * any authenticated user. Never anonymous on private/legacy.
+ */
+function canRead(meta, user) {
+  if (meta.visibility === 'link') return true;
+  if (!user) return false;
+  if (!meta.ownerId) return true;
+  return meta.ownerId === user.id;
+}
+
+const PUBLIC_FILE_RE = /^\/api\/files\/[^/]+$/;
+
 // ── Retention cron handler ──────────────────────────────────────────────────
 // Runs daily at 03:00 UTC. Archives after 30 days of inactivity, deletes after 60.
 
@@ -177,14 +256,29 @@ const DELETE_MS = 60 * 24 * 60 * 60 * 1000;
 async function runRetention(env, log) {
   const now = Date.now();
   const allMeta = await listAllMeta(env.HISTORY);
-  const folders = await readFolders(env.HISTORY);
-  const folderIds = new Set(folders.map((f) => f.id));
+  const foldersByOwner = new Map();
+  async function ownerFolderIds(ownerId) {
+    if (!ownerId) return new Set();
+    if (!foldersByOwner.has(ownerId)) {
+      const f = await readFolders(env.HISTORY, ownerId);
+      foldersByOwner.set(ownerId, new Set(f.map((x) => x.id)));
+    }
+    return foldersByOwner.get(ownerId);
+  }
   const deletedIds = [];
+  /** @type {Map<string, string[]>} */
+  const deletedByOwner = new Map();
   let archivedCount = 0;
 
   for (const [id, meta] of allMeta) {
     const ref = meta.lastAccessedAt || meta.created;
     if (!ref) continue;
+
+    // Legacy notes without an owner are untouched until the owner migration
+    // stamps them — skip before any folderId stripping, archiving, or deletion.
+    if (!meta.ownerId) continue;
+
+    const folderIds = await ownerFolderIds(meta.ownerId);
 
     // Skip files in valid folders (exempt from retention)
     if (meta.folderId && folderIds.has(meta.folderId)) continue;
@@ -201,6 +295,10 @@ async function runRetention(env, log) {
       await env.HISTORY.delete(`meta:${id}`);
       await env.MD_FILES.delete(`${id}.md`);
       deletedIds.push(id);
+      if (meta.ownerId) {
+        if (!deletedByOwner.has(meta.ownerId)) deletedByOwner.set(meta.ownerId, []);
+        deletedByOwner.get(meta.ownerId).push(id);
+      }
     } else if (age >= ARCHIVE_MS && !meta.archivedAt) {
       meta.archivedAt = new Date().toISOString();
       await env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
@@ -208,13 +306,15 @@ async function runRetention(env, log) {
     }
   }
 
-  if (deletedIds.length > 0) {
-    const deleted = new Set(deletedIds);
-    const history = await readHistory(env.HISTORY);
+  for (const [ownerId, ids] of deletedByOwner) {
+    const deleted = new Set(ids);
+    const history = await readHistory(env.HISTORY, ownerId);
     await writeHistory(
       env.HISTORY,
+      ownerId,
       history.filter((h) => !deleted.has(h.id))
     );
+    for (const id of ids) await removeFromNoteIndex(env.HISTORY, ownerId, id);
   }
 
   log.info('retention.run', { archived: archivedCount, deleted: deletedIds.length });
@@ -253,13 +353,16 @@ app.use('/api/dev/*', async (c, next) => {
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 // Resolves the caller on every /api/* request (dev stub → Access JWT → null).
-// Only /api/auth/* is reachable anonymously; everything else 401s without a user.
+// /api/auth/* and GET /api/files/:id are reachable anonymously (the latter
+// enforces visibility itself); everything else 401s without a user.
 
 app.use('/api/*', async (c, next) => {
   const user = await resolveUser(c);
   c.set('user', user);
   const path = new URL(c.req.url).pathname;
   if (path.startsWith('/api/auth/')) return next();
+  // Note reads are visibility-checked in the handler (link notes are public).
+  if (c.req.method === 'GET' && PUBLIC_FILE_RE.test(path)) return next();
   if (!user) {
     c.get('logger').warn('auth.unauthorized', { path });
     return c.json({ error: 'Unauthorized' }, 401);
@@ -324,26 +427,22 @@ app.post('/api/upload', async (c) => {
     return c.json({ error: 'Only .md files are accepted' }, 400);
   }
 
+  const user = c.get('user');
   const id = crypto.randomUUID();
   const content = await file.text();
-  const now = new Date().toISOString();
+  const meta = newMeta({
+    filename: originalName,
+    source: 'upload',
+    size: content.length,
+    ownerId: user.id,
+  });
 
   await c.env.MD_FILES.put(`${id}.md`, content);
-  await c.env.HISTORY.put(
-    `meta:${id}`,
-    JSON.stringify({
-      filename: originalName,
-      source: 'upload',
-      size: content.length,
-      created: now,
-      lastAccessedAt: now,
-    })
-  );
-  await addHistoryEntry(c.env.HISTORY, { id, filename: originalName, source: 'upload' });
+  await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+  await addToNoteIndex(c.env.HISTORY, user.id, id);
+  await addHistoryEntry(c.env.HISTORY, user.id, { id, filename: originalName, source: 'upload' });
 
-  const log = c.get('logger');
-  log.info('file.upload', { fileId: id, filename: originalName, size: content.length });
-
+  c.get('logger').info('file.upload', { fileId: id, filename: originalName, size: content.length });
   return c.json({ id, filename: originalName });
 });
 
@@ -355,47 +454,45 @@ app.post('/api/paste', async (c) => {
     return c.json({ error: 'No content provided' }, 400);
   }
 
+  const user = c.get('user');
   const id = crypto.randomUUID();
   const displayName = title || 'Pasted Markdown';
-  const now = new Date().toISOString();
+  const meta = newMeta({
+    filename: displayName,
+    source: 'paste',
+    size: content.length,
+    ownerId: user.id,
+  });
 
   await c.env.MD_FILES.put(`${id}.md`, content);
-  await c.env.HISTORY.put(
-    `meta:${id}`,
-    JSON.stringify({
-      filename: displayName,
-      source: 'paste',
-      size: content.length,
-      created: now,
-      lastAccessedAt: now,
-    })
-  );
-  await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source: 'paste' });
+  await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+  await addToNoteIndex(c.env.HISTORY, user.id, id);
+  await addHistoryEntry(c.env.HISTORY, user.id, { id, filename: displayName, source: 'paste' });
 
-  const log = c.get('logger');
-  log.info('file.paste', { fileId: id, filename: displayName, size: content.length });
-
+  c.get('logger').info('file.paste', { fileId: id, filename: displayName, size: content.length });
   return c.json({ id, filename: displayName });
 });
 
 // ── File listing ────────────────────────────────────────────────────────────
 
 app.get('/api/files', async (c) => {
-  const allMeta = await listAllMeta(c.env.HISTORY);
+  const user = c.get('user');
+  const ids = await readNoteIndex(c.env.HISTORY, user.id);
+  const allMeta = await getMetaMany(c.env.HISTORY, ids);
   const files = [];
-
-  for (const [id, meta] of allMeta) {
-    if (meta.archivedAt) continue;
+  for (const id of ids) {
+    const meta = allMeta.get(id);
+    if (!meta || meta.archivedAt) continue;
     files.push({
       id,
       filename: meta.filename,
       displayName: meta.filename,
       source: meta.source,
       size: meta.size,
+      visibility: meta.visibility || 'private',
       modified: meta.lastAccessedAt || meta.created,
     });
   }
-
   return c.json(files);
 });
 
@@ -403,38 +500,42 @@ app.get('/api/files', async (c) => {
 
 app.get('/api/files/:id', async (c) => {
   const id = c.req.param('id');
+  const user = c.get('user');
+  const log = c.get('logger');
 
-  const object = await c.env.MD_FILES.get(`${id}.md`);
-  if (!object) {
-    const log = c.get('logger');
+  const meta = await loadMeta(c.env.HISTORY, id);
+  if (!meta || !canRead(meta, user)) {
     log.warn('file.notFound', { fileId: id });
     return c.json({ error: 'File not found' }, 404);
   }
-
+  const object = await c.env.MD_FILES.get(`${id}.md`);
+  if (!object) {
+    log.warn('file.notFound', { fileId: id });
+    return c.json({ error: 'File not found' }, 404);
+  }
   const content = await object.text();
+  const displayName = meta.filename || `${id}.md`;
 
-  // Get display name from metadata
-  const metaJson = await c.env.HISTORY.get(`meta:${id}`);
-  let displayName = `${id}.md`;
-  let source = 'upload';
-  let created = null;
-  if (metaJson) {
-    try {
-      const meta = JSON.parse(metaJson);
-      displayName = meta.filename || displayName;
-      source = meta.source || source;
-      created = meta.created || null;
-    } catch {
-      /* use defaults */
-    }
+  // Owner-only: a non-owner read must never rewrite meta (a stale read-back
+  // could undo a just-made visibility change under KV eventual consistency).
+  if (isOwner(meta, user)) await touchMeta(c.env.HISTORY, id);
+  if (user) {
+    await addHistoryEntry(c.env.HISTORY, user.id, {
+      id,
+      filename: displayName,
+      source: meta.source || 'upload',
+    });
   }
 
-  await addHistoryEntry(c.env.HISTORY, { id, filename: displayName, source });
-
-  const log = c.get('logger');
   log.debug('file.fetch', { fileId: id });
-
-  return c.json({ id, filename: displayName, content, created });
+  return c.json({
+    id,
+    filename: displayName,
+    content,
+    created: meta.created || null,
+    owned: isOwner(meta, user),
+    visibility: meta.visibility || 'private',
+  });
 });
 
 // ── File rename ─────────────────────────────────────────────────────────────
@@ -449,20 +550,20 @@ app.patch('/api/files/:id', async (c) => {
 
   const trimmed = filename.trim();
 
-  const metaJson = await c.env.HISTORY.get(`meta:${id}`);
-  if (!metaJson) {
-    const log = c.get('logger');
-    log.warn('file.notFound', { fileId: id });
+  const user = c.get('user');
+  const meta = await loadMeta(c.env.HISTORY, id);
+  if (!meta || !isOwner(meta, user)) {
+    c.get('logger').warn('file.notFound', { fileId: id });
     return c.json({ error: 'File not found' }, 404);
   }
-
-  const meta = JSON.parse(metaJson);
   meta.filename = trimmed;
   await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
-
-  const history = await readHistory(c.env.HISTORY);
-  const updated = history.map((h) => (h.id === id ? { ...h, filename: trimmed } : h));
-  await writeHistory(c.env.HISTORY, updated);
+  const history = await readHistory(c.env.HISTORY, user.id);
+  await writeHistory(
+    c.env.HISTORY,
+    user.id,
+    history.map((h) => (h.id === id ? { ...h, filename: trimmed } : h))
+  );
 
   const log = c.get('logger');
   log.info('file.rename', { fileId: id, filename: trimmed });
@@ -470,39 +571,64 @@ app.patch('/api/files/:id', async (c) => {
   return c.json({ id, filename: trimmed });
 });
 
+app.patch('/api/files/:id/visibility', async (c) => {
+  const id = c.req.param('id');
+  const user = c.get('user');
+  const { visibility } = await c.req.json();
+  if (visibility !== 'private' && visibility !== 'link') {
+    return c.json({ error: "visibility must be 'private' or 'link'" }, 400);
+  }
+  const meta = await loadMeta(c.env.HISTORY, id);
+  if (!meta || !isOwner(meta, user)) {
+    c.get('logger').warn('file.notFound', { fileId: id });
+    return c.json({ error: 'File not found' }, 404);
+  }
+  meta.visibility = visibility;
+  await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+  c.get('logger').info('file.visibility', { fileId: id, visibility });
+  return c.json({ id, visibility });
+});
+
 // ── File delete ─────────────────────────────────────────────────────────────
 
 app.delete('/api/files/:id', async (c) => {
   const id = c.req.param('id');
+  const user = c.get('user');
+  const meta = await loadMeta(c.env.HISTORY, id);
+  if (!meta || !isOwner(meta, user)) {
+    c.get('logger').warn('file.notFound', { fileId: id });
+    return c.json({ error: 'File not found' }, 404);
+  }
 
   await c.env.MD_FILES.delete(`${id}.md`);
   await c.env.HISTORY.delete(`meta:${id}`);
+  await removeFromNoteIndex(c.env.HISTORY, user.id, id);
 
-  const history = await readHistory(c.env.HISTORY);
+  const history = await readHistory(c.env.HISTORY, user.id);
   await writeHistory(
     c.env.HISTORY,
+    user.id,
     history.filter((h) => h.id !== id)
   );
 
-  const folders = await readFolders(c.env.HISTORY);
+  const folders = await readFolders(c.env.HISTORY, user.id);
   let foldersChanged = false;
   for (const folder of folders) {
     const before = folder.fileIds.length;
     folder.fileIds = folder.fileIds.filter((fid) => fid !== id);
     if (folder.fileIds.length !== before) foldersChanged = true;
   }
-  if (foldersChanged) await writeFolders(c.env.HISTORY, folders);
+  if (foldersChanged) await writeFolders(c.env.HISTORY, user.id, folders);
 
-  const log = c.get('logger');
-  log.info('file.delete', { fileId: id });
-
+  c.get('logger').info('file.delete', { fileId: id });
   return c.json({ success: true });
 });
 
 // ── History routes ──────────────────────────────────────────────────────────
 
 app.get('/api/history', async (c) => {
-  const history = await readHistory(c.env.HISTORY);
+  const user = c.get('user');
+  const history = await readHistory(c.env.HISTORY, user.id);
   const allMeta = await getMetaMany(
     c.env.HISTORY,
     history.map((h) => h.id)
@@ -512,17 +638,17 @@ app.get('/api/history', async (c) => {
     history
       .filter((h) => {
         const meta = allMeta.get(h.id);
-        return meta && !meta.archivedAt;
+        return meta && !meta.archivedAt && canRead(meta, user);
       })
       .map((h) => {
         const meta = allMeta.get(h.id);
-        return { ...h, folderId: meta?.folderId || null };
+        return { ...h, folderId: meta && isOwner(meta, user) ? meta.folderId || null : null };
       })
   );
 });
 
 app.delete('/api/history', async (c) => {
-  await writeHistory(c.env.HISTORY, []);
+  await writeHistory(c.env.HISTORY, c.get('user').id, []);
   const log = c.get('logger');
   log.info('history.clear');
   return c.json({ success: true });
@@ -530,9 +656,10 @@ app.delete('/api/history', async (c) => {
 
 app.delete('/api/history/:id', async (c) => {
   const id = c.req.param('id');
-  const history = await readHistory(c.env.HISTORY);
+  const history = await readHistory(c.env.HISTORY, c.get('user').id);
   await writeHistory(
     c.env.HISTORY,
+    c.get('user').id,
     history.filter((h) => h.id !== id)
   );
   const log = c.get('logger');
@@ -543,7 +670,8 @@ app.delete('/api/history/:id', async (c) => {
 // ── Folder routes ───────────────────────────────────────────────────────────
 
 app.get('/api/folders', async (c) => {
-  const folders = await readFolders(c.env.HISTORY);
+  const user = c.get('user');
+  const folders = await readFolders(c.env.HISTORY, user.id);
   const allMeta = await getMetaMany(
     c.env.HISTORY,
     folders.flatMap((f) => f.fileIds)
@@ -556,7 +684,7 @@ app.get('/api/folders', async (c) => {
     files: folder.fileIds
       .map((fid) => {
         const meta = allMeta.get(fid);
-        if (!meta) return null;
+        if (!meta || !isOwner(meta, user)) return null;
         return { id: fid, filename: meta.filename, source: meta.source, size: meta.size };
       })
       .filter(Boolean),
@@ -578,9 +706,9 @@ app.post('/api/folders', async (c) => {
     created: new Date().toISOString(),
   };
 
-  const folders = await readFolders(c.env.HISTORY);
+  const folders = await readFolders(c.env.HISTORY, c.get('user').id);
   folders.push(folder);
-  await writeFolders(c.env.HISTORY, folders);
+  await writeFolders(c.env.HISTORY, c.get('user').id, folders);
 
   const log = c.get('logger');
   log.info('folder.create', { folderId: folder.id, name: folder.name });
@@ -595,38 +723,46 @@ app.patch('/api/folders/:id', async (c) => {
     return c.json({ error: 'Folder name is required' }, 400);
   }
 
-  const folders = await readFolders(c.env.HISTORY);
+  const folders = await readFolders(c.env.HISTORY, c.get('user').id);
   const folder = folders.find((f) => f.id === id);
   if (!folder) return c.json({ error: 'Folder not found' }, 404);
 
   folder.name = name.trim();
-  await writeFolders(c.env.HISTORY, folders);
+  await writeFolders(c.env.HISTORY, c.get('user').id, folders);
 
   return c.json(folder);
 });
 
 app.delete('/api/folders/:id', async (c) => {
   const id = c.req.param('id');
-  const folders = await readFolders(c.env.HISTORY);
+  const folders = await readFolders(c.env.HISTORY, c.get('user').id);
   const folder = folders.find((f) => f.id === id);
   if (!folder) return c.json({ error: 'Folder not found' }, 404);
 
+  const user = c.get('user');
+  const deletedIds = [];
   for (const fid of folder.fileIds) {
+    const meta = await loadMeta(c.env.HISTORY, fid);
+    if (!meta || !isOwner(meta, user)) continue;
     await c.env.MD_FILES.delete(`${fid}.md`);
     await c.env.HISTORY.delete(`meta:${fid}`);
+    await removeFromNoteIndex(c.env.HISTORY, user.id, fid);
+    deletedIds.push(fid);
   }
 
-  if (folder.fileIds.length > 0) {
-    const deleted = new Set(folder.fileIds);
-    const history = await readHistory(c.env.HISTORY);
+  if (deletedIds.length > 0) {
+    const deleted = new Set(deletedIds);
+    const history = await readHistory(c.env.HISTORY, user.id);
     await writeHistory(
       c.env.HISTORY,
+      user.id,
       history.filter((h) => !deleted.has(h.id))
     );
   }
 
   await writeFolders(
     c.env.HISTORY,
+    c.get('user').id,
     folders.filter((f) => f.id !== id)
   );
 
@@ -641,21 +777,22 @@ app.post('/api/folders/:id/files', async (c) => {
   const { fileId } = await c.req.json();
   if (!fileId) return c.json({ error: 'fileId is required' }, 400);
 
-  const folders = await readFolders(c.env.HISTORY);
+  const folders = await readFolders(c.env.HISTORY, c.get('user').id);
   const folder = folders.find((f) => f.id === folderId);
   if (!folder) return c.json({ error: 'Folder not found' }, 404);
 
-  const metaJson = await c.env.HISTORY.get(`meta:${fileId}`);
-  if (!metaJson) return c.json({ error: 'File not found' }, 404);
+  const meta = await loadMeta(c.env.HISTORY, fileId);
+  if (!meta || !isOwner(meta, c.get('user'))) {
+    return c.json({ error: 'File not found' }, 404);
+  }
 
   for (const f of folders) {
     f.fileIds = f.fileIds.filter((id) => id !== fileId);
   }
 
   folder.fileIds.push(fileId);
-  await writeFolders(c.env.HISTORY, folders);
+  await writeFolders(c.env.HISTORY, c.get('user').id, folders);
 
-  const meta = JSON.parse(metaJson);
   meta.folderId = folderId;
   await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
 
@@ -666,23 +803,20 @@ app.delete('/api/folders/:id/files/:fileId', async (c) => {
   const folderId = c.req.param('id');
   const fileId = c.req.param('fileId');
 
-  const folders = await readFolders(c.env.HISTORY);
+  const folders = await readFolders(c.env.HISTORY, c.get('user').id);
   const folder = folders.find((f) => f.id === folderId);
   if (!folder) return c.json({ error: 'Folder not found' }, 404);
 
-  folder.fileIds = folder.fileIds.filter((id) => id !== fileId);
-  await writeFolders(c.env.HISTORY, folders);
-
-  const metaJson = await c.env.HISTORY.get(`meta:${fileId}`);
-  if (metaJson) {
-    try {
-      const meta = JSON.parse(metaJson);
-      delete meta.folderId;
-      await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-    } catch {
-      /* ignore corrupt meta */
-    }
+  const meta = await loadMeta(c.env.HISTORY, fileId);
+  if (!meta || !isOwner(meta, c.get('user'))) {
+    return c.json({ error: 'File not found' }, 404);
   }
+
+  folder.fileIds = folder.fileIds.filter((id) => id !== fileId);
+  await writeFolders(c.env.HISTORY, c.get('user').id, folders);
+
+  delete meta.folderId;
+  await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
 
   return c.json({ success: true });
 });
@@ -693,25 +827,22 @@ app.post('/api/folders/:id/files/:fileId/move', async (c) => {
   const { targetFolderId } = await c.req.json();
   if (!targetFolderId) return c.json({ error: 'targetFolderId is required' }, 400);
 
-  const folders = await readFolders(c.env.HISTORY);
+  const folders = await readFolders(c.env.HISTORY, c.get('user').id);
   const source = folders.find((f) => f.id === sourceFolderId);
   const target = folders.find((f) => f.id === targetFolderId);
   if (!source || !target) return c.json({ error: 'Folder not found' }, 404);
 
+  const meta = await loadMeta(c.env.HISTORY, fileId);
+  if (!meta || !isOwner(meta, c.get('user'))) {
+    return c.json({ error: 'File not found' }, 404);
+  }
+
   source.fileIds = source.fileIds.filter((id) => id !== fileId);
   if (!target.fileIds.includes(fileId)) target.fileIds.push(fileId);
-  await writeFolders(c.env.HISTORY, folders);
+  await writeFolders(c.env.HISTORY, c.get('user').id, folders);
 
-  const metaJson = await c.env.HISTORY.get(`meta:${fileId}`);
-  if (metaJson) {
-    try {
-      const meta = JSON.parse(metaJson);
-      meta.folderId = targetFolderId;
-      await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
-    } catch {
-      /* ignore corrupt meta */
-    }
-  }
+  meta.folderId = targetFolderId;
+  await c.env.HISTORY.put(`meta:${fileId}`, JSON.stringify(meta));
 
   return c.json({ success: true });
 });

@@ -34,7 +34,7 @@ describe('folders', () => {
     const id = await paste('x', 'Doc', env);
     await authed(`/api/folders/${a.id}/files`, json({ fileId: id }), env);
     await authed(`/api/folders/${b.id}/files`, json({ fileId: id }), env);
-    const folders = JSON.parse(await env.HISTORY.get('folders'));
+    const folders = JSON.parse(await env.HISTORY.get('folders:user_local_dev'));
     expect(folders.find((f) => f.id === a.id).fileIds).toEqual([]);
     expect(folders.find((f) => f.id === b.id).fileIds).toEqual([id]);
   });
@@ -73,7 +73,7 @@ describe('folders', () => {
       env
     );
     expect(res.status).toBe(200);
-    const folders = JSON.parse(await env.HISTORY.get('folders'));
+    const folders = JSON.parse(await env.HISTORY.get('folders:user_local_dev'));
     expect(folders.find((f) => f.id === a.id).fileIds).toEqual([]);
     expect(folders.find((f) => f.id === b.id).fileIds).toEqual([id]);
     expect(JSON.parse(await env.HISTORY.get(`meta:${id}`)).folderId).toBe(b.id);
@@ -89,7 +89,9 @@ describe('folders', () => {
     expect(await env.MD_FILES.get(`${gone}.md`)).toBeNull();
     expect(await env.HISTORY.get(`meta:${gone}`)).toBeNull();
     expect(await env.MD_FILES.get(`${keep}.md`)).not.toBeNull();
-    expect(JSON.parse(await env.HISTORY.get('history')).map((h) => h.id)).toEqual([keep]);
-    expect(JSON.parse(await env.HISTORY.get('folders'))).toEqual([]);
+    expect(JSON.parse(await env.HISTORY.get('history:user_local_dev')).map((h) => h.id)).toEqual([
+      keep,
+    ]);
+    expect(JSON.parse(await env.HISTORY.get('folders:user_local_dev'))).toEqual([]);
   });
 });

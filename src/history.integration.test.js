@@ -22,9 +22,9 @@ describe('history', () => {
       source: 'paste',
       viewedAt: '2020-01-01T00:00:00.000Z',
     }));
-    await env.HISTORY.put('history', JSON.stringify(seed));
+    await env.HISTORY.put('history:user_local_dev', JSON.stringify(seed));
     const id = await paste('n', 'New', env);
-    const history = JSON.parse(await env.HISTORY.get('history'));
+    const history = JSON.parse(await env.HISTORY.get('history:user_local_dev'));
     expect(history).toHaveLength(100);
     expect(history[0].id).toBe(id);
     expect(history.at(-1).id).toBe('old-98');

@@ -35,7 +35,7 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 **Storage bindings** (configured in `wrangler.jsonc`):
 
 - `MD_FILES` — R2 bucket, stores raw markdown as `{uuid}.md`
-- `HISTORY` — KV namespace, stores `history` (JSON array, max 100 entries) and `meta:{uuid}` (per-file metadata)
+- `HISTORY` — KV namespace: `meta:{uuid}` (per-file metadata incl. `ownerId`, `visibility: 'private'|'link'`, `editors`, `currentRev`), `user:{sub}` (account), `user:{sub}:notes` (owner's note ids, newest first), `history:{sub}` (view history, max 100), `folders:{sub}`
 
 **Auth:** Cloudflare Access (Zero Trust) gates only `/api/auth/login`. Every `/api/*` request runs `resolveUser()` which verifies the `CF_Authorization` cookie (or `Cf-Access-Jwt-Assertion` header) via `src/auth.js` against `ACCESS_AUD` / `ACCESS_TEAM_DOMAIN` (wrangler vars, not secrets) and sets `c.get('user')` to `{ id, email }` or `null`. Routes outside `/api/auth/*` 401 without a user. Design: `docs/plans/2026-09-04-auth-design.md`.
 
@@ -45,22 +45,23 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 
 All routes are prefixed with `/api/`. Auth-protected unless noted:
 
-| Method | Path                 | Purpose                                                |
-| ------ | -------------------- | ------------------------------------------------------ |
-| GET    | `/api/auth/login`    | Access-gated; upserts user, redirects (unprotected)    |
-| GET    | `/api/auth/check`    | `{ authenticated, user }` (unprotected)                |
-| POST   | `/api/auth/logout`   | Clears cookie, returns Access logout URL (unprotected) |
-| POST   | `/api/upload`        | Upload `.md` file (multipart form)                     |
-| POST   | `/api/paste`         | Save pasted markdown (JSON body)                       |
-| GET    | `/api/files`         | List all files                                         |
-| GET    | `/api/files/:id`     | Get file content                                       |
-| PATCH  | `/api/files/:id`     | Rename file                                            |
-| DELETE | `/api/files/:id`     | Delete file                                            |
-| GET    | `/api/history`       | Get view history                                       |
-| DELETE | `/api/history`       | Clear all history                                      |
-| DELETE | `/api/history/:id`   | Remove single history entry                            |
-| POST   | `/api/dev/seed`      | UAT only: reset + seed scenarios                       |
-| POST   | `/api/dev/retention` | UAT only: run retention cron now                       |
+| Method | Path                        | Purpose                                                       |
+| ------ | --------------------------- | ------------------------------------------------------------- |
+| GET    | `/api/auth/login`           | Access-gated; upserts user, redirects (unprotected)           |
+| GET    | `/api/auth/check`           | `{ authenticated, user }` (unprotected)                       |
+| POST   | `/api/auth/logout`          | Clears cookie, returns Access logout URL (unprotected)        |
+| POST   | `/api/upload`               | Upload `.md` file (multipart form)                            |
+| POST   | `/api/paste`                | Save pasted markdown (JSON body)                              |
+| GET    | `/api/files`                | List all files                                                |
+| GET    | `/api/files/:id`            | Get file content; anonymous OK for 'link' notes (unprotected) |
+| PATCH  | `/api/files/:id`            | Rename file                                                   |
+| PATCH  | `/api/files/:id/visibility` | Set 'private' or 'link' (owner only)                          |
+| DELETE | `/api/files/:id`            | Delete file                                                   |
+| GET    | `/api/history`              | Get view history                                              |
+| DELETE | `/api/history`              | Clear all history                                             |
+| DELETE | `/api/history/:id`          | Remove single history entry                                   |
+| POST   | `/api/dev/seed`             | UAT only: reset + seed scenarios                              |
+| POST   | `/api/dev/retention`        | UAT only: run retention cron now                              |
 
 ## CI/CD
 
@@ -68,7 +69,7 @@ GitHub Actions (`.github/workflows/ci.yml`): `ci` job (lint, format:check, typec
 
 ## Testing
 
-`vitest.config.js` has two projects: `unit` (node, `src/**/*.test.js`) and `integration` (`@cloudflare/vitest-pool-workers`, `src/**/*.integration.test.js`, miniflare R2 `MD_FILES` + KV `HISTORY`, isolated storage off — every test calls `clearAll()` in `beforeEach`). Tests drive the Hono app directly via `worker.fetch(req, env, ctx)` with a stubbed `ASSETS` fetcher (`src/test-utils/app.js`), so they control the full env. Vitest is pinned to 3.x for pool-workers compat.
+`vitest.config.js` has two projects: `unit` (node, `src/**/*.test.js`) and `integration` (`@cloudflare/vitest-pool-workers`, `src/**/*.integration.test.js`, miniflare R2 `MD_FILES` + KV `HISTORY`, isolated storage off — every test calls `clearAll()` in `beforeEach`). Tests drive the Hono app directly via `worker.fetch(req, env, ctx)` with a stubbed `ASSETS` fetcher (`src/test-utils/app.js`), so they control the full env. Vitest is pinned to 3.x for pool-workers compat. `src/ownership.integration.test.js` covers per-user visibility/ownership rules and `src/migrate.integration.test.js` covers `migrateToOwner`; both use two-user scenarios via `asUser()`.
 
 Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 
@@ -83,9 +84,11 @@ Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 - Client-side markdown rendering using CDN-loaded markdown-it and highlight.js (not bundled)
 - Theme switching via `data-theme` attribute on `<html>` with CSS custom properties
 - Sidebar uses CSS `margin-left` transition on desktop, `transform: translateX` on mobile (<768px)
-- History is capped at 100 entries, stored as a single KV value
+- History is capped at 100 entries per user, stored as a single KV value at `history:{sub}`
 - File metadata stored separately in KV (`meta:{uuid}`) from file content in R2
 - SPA routing uses strict ID regexes (25-char base36 or legacy UUID) on both server and client — only valid file paths get the fallback
 - Theme has three modes stored in `localStorage.theme`: `light`, `dark`, `device` (follows `prefers-color-scheme` live); `data-theme` on `<html>` always holds the resolved light/dark value
 - Sidebar history is grouped under Today / Yesterday / This Week / Older headings based on `viewedAt`
 - Wide tables are wrapped in `.table-wrapper` after render so they scroll horizontally within their own bounds
+- Ownership: every write route checks `meta.ownerId === user.id` and answers 404 (never 403). `canRead()`: `link` → anyone, `private` → owner, legacy meta without `ownerId` → any authenticated user until `pnpm migrate:owner` has run.
+- Listing a user's notes reads `user:{sub}:notes` then `getMetaMany`; never a `meta:` prefix scan (eventually consistent). Only the retention cron scans.
