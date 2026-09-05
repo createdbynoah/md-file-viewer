@@ -23,19 +23,14 @@ export async function call(path, init = {}, env = makeEnv()) {
   return res;
 }
 
-export async function login(env = makeEnv(), password = 'test-password') {
-  const res = await call(
-    '/api/auth/login',
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password }),
-    },
-    env
-  );
-  const setCookie = res.headers.get('set-cookie') || '';
-  const cookie = setCookie.split(';')[0];
-  return { res, cookie };
+/** Env with the UAT stub on: every request is authenticated as AUTH_STUB_USER. */
+export function devEnv(overrides = {}) {
+  return makeEnv({ ENVIRONMENT: 'uat', AUTH_STUB_USER: 'user_local_dev', ...overrides });
+}
+
+/** Header that switches identity under the dev stub (ignored outside isDevEnv). */
+export function asUser(id) {
+  return { 'x-dev-user': id };
 }
 
 export function json(body, extra = {}) {
@@ -47,13 +42,13 @@ export function json(body, extra = {}) {
   };
 }
 
-export async function authed(path, init = {}, env = makeEnv()) {
-  const { cookie } = await login(env);
-  return call(path, { ...init, headers: { ...(init.headers || {}), cookie } }, env);
+/** Sends a request as an authenticated user via the dev stub. */
+export async function authed(path, init = {}, env = devEnv()) {
+  return call(path, init, env);
 }
 
 /** Creates a note via /api/paste and returns its id. */
-export async function paste(content, title, env = makeEnv()) {
+export async function paste(content, title, env = devEnv()) {
   const res = await authed('/api/paste', json({ content, title }), env);
   const body = await res.json();
   return body.id;

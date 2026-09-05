@@ -93,10 +93,6 @@ const child = spawn(
     String(port),
     '--var',
     `AUTH_STUB_USER:${STUB_USER}`,
-    '--var',
-    'ACCESS_PASSWORD:uat',
-    '--var',
-    'COOKIE_SECRET:uat-cookie-secret',
   ],
   { cwd: ROOT, detached: true, stdio: ['ignore', log, log] }
 );

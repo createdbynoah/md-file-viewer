@@ -4,3 +4,4 @@ node_modules
 .claude/worktrees
 .uat
 pnpm-lock.yaml
+.superpowers/

@@ -42,18 +42,10 @@
           </svg>
         </div>
         <h1>Markdown Viewer</h1>
-        <p class="login-subtitle">Enter password to continue</p>
-        <form id="login-form">
-          <input
-            type="password"
-            id="login-password"
-            placeholder="Password"
-            autocomplete="current-password"
-            required
-          />
-          <button type="submit">Sign In</button>
-        </form>
-        <p id="login-error" class="error" hidden>Invalid password</p>
+        <p class="login-subtitle">Sign in to view and manage your notes</p>
+        <div class="login-actions">
+          <a id="login-link" class="login-button" href="/api/auth/login">Sign in</a>
+        </div>
       </div>
     </div>
 

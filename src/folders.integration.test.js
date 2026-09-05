@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { authed, json, makeEnv, paste, clearAll } from './test-utils/app.js';
+import { authed, json, devEnv, paste, clearAll } from './test-utils/app.js';
 
 async function createFolder(name, env) {
   return (await authed('/api/folders', json({ name }), env)).json();
@@ -9,7 +9,7 @@ describe('folders', () => {
   beforeEach(() => clearAll());
 
   it('creates, renames, lists with enriched files', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     expect((await authed('/api/folders', json({ name: ' ' }), env)).status).toBe(400);
     const f = await createFolder('Work', env);
     expect(f.id).toMatch(/^f-[0-9a-f]{8}$/);
@@ -28,7 +28,7 @@ describe('folders', () => {
   });
 
   it('adding a file to a folder removes it from any other folder', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const a = await createFolder('A', env);
     const b = await createFolder('B', env);
     const id = await paste('x', 'Doc', env);
@@ -40,7 +40,7 @@ describe('folders', () => {
   });
 
   it('404s on unknown folder or file', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const f = await createFolder('A', env);
     expect((await authed('/api/folders/f-nope/files', json({ fileId: 'x' }), env)).status).toBe(
       404
@@ -52,7 +52,7 @@ describe('folders', () => {
   });
 
   it('removing a file from a folder clears its folderId', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const f = await createFolder('A', env);
     const id = await paste('x', 'Doc', env);
     await authed(`/api/folders/${f.id}/files`, json({ fileId: id }), env);
@@ -62,7 +62,7 @@ describe('folders', () => {
   });
 
   it('move transfers the file and updates meta', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const a = await createFolder('A', env);
     const b = await createFolder('B', env);
     const id = await paste('x', 'Doc', env);
@@ -80,7 +80,7 @@ describe('folders', () => {
   });
 
   it('deleting a folder deletes its files, meta and history entries', async () => {
-    const env = makeEnv();
+    const env = devEnv();
     const f = await createFolder('A', env);
     const keep = await paste('k', 'Keep', env);
     const gone = await paste('g', 'Gone', env);

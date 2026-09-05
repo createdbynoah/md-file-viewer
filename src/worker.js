@@ -1,50 +1,25 @@
 import { Hono } from 'hono';
-import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { getCookie, deleteCookie } from 'hono/cookie';
 import { createLogger } from './logger.js';
 import { seedScenarios } from './seed.js';
+import { verifyAccessJwt } from './auth.js';
 
 /**
  * @typedef {object} Env
  * @property {R2Bucket} MD_FILES
  * @property {KVNamespace} HISTORY
  * @property {Fetcher} ASSETS
- * @property {string} ACCESS_PASSWORD
- * @property {string} COOKIE_SECRET
+ * @property {string} ACCESS_AUD          Access application AUD tag (wrangler var)
+ * @property {string} ACCESS_TEAM_DOMAIN  e.g. myteam.cloudflareaccess.com (wrangler var)
  * @property {string} [LOG_LEVEL]
  * @property {string} [ENVIRONMENT]   'production' in wrangler.jsonc; 'uat' under env.uat
  * @property {string} [AUTH_STUB_USER] set only by scripts/uat.mjs via `wrangler dev --var`
  */
 
-/** @type {Hono<{ Bindings: Env, Variables: { logger: ReturnType<typeof createLogger> } }>} */
+/** @typedef {{ id: string, email: string }} User */
+
+/** @type {Hono<{ Bindings: Env, Variables: { logger: ReturnType<typeof createLogger>, user: User | null } }>} */
 const app = new Hono();
-
-// ── Web Crypto auth helpers ─────────────────────────────────────────────────
-
-async function signValue(value, secret) {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function verifySignedCookie(cookieValue, secret) {
-  if (!cookieValue) return false;
-  const parts = cookieValue.split('.');
-  if (parts.length !== 2) return false;
-  const [value, sig] = parts;
-  const expected = await signValue(value, secret);
-  const encoder = new TextEncoder();
-  const a = encoder.encode(sig);
-  const b = encoder.encode(expected);
-  if (a.byteLength !== b.byteLength) return false;
-  return crypto.subtle.timingSafeEqual(a, b);
-}
 
 // ── History helpers ─────────────────────────────────────────────────────────
 
@@ -104,6 +79,53 @@ async function readFolders(kv) {
 
 async function writeFolders(kv, folders) {
   await kv.put('folders', JSON.stringify(folders));
+}
+
+// ── User helpers ────────────────────────────────────────────────────────────
+
+const ACCESS_COOKIE = 'CF_Authorization';
+
+/** Resolve the caller. Dev stub wins; otherwise verify the Access JWT. */
+async function resolveUser(c) {
+  if (isDevEnv(c.env)) {
+    const id = c.req.header('x-dev-user') || c.env.AUTH_STUB_USER;
+    return { id, email: `${id}@dev.local` };
+  }
+  const token = c.req.header('cf-access-jwt-assertion') || getCookie(c, ACCESS_COOKIE);
+  return verifyAccessJwt(token, {
+    aud: c.env.ACCESS_AUD,
+    teamDomain: c.env.ACCESS_TEAM_DOMAIN,
+  });
+}
+
+/** Create or touch `user:{id}`. */
+async function upsertUser(kv, user) {
+  const key = `user:${user.id}`;
+  const now = new Date().toISOString();
+  const existing = await kv.get(key);
+  let record = { id: user.id, email: user.email, createdAt: now, lastSeenAt: now };
+  if (existing) {
+    try {
+      record = { ...JSON.parse(existing), email: user.email, lastSeenAt: now };
+    } catch {
+      /* overwrite corrupt record */
+    }
+  }
+  await kv.put(key, JSON.stringify(record));
+  return record;
+}
+
+/** Only allow same-origin absolute paths as a post-login destination. */
+function safeNext(raw) {
+  if (!raw) return '/';
+  let u;
+  try {
+    u = new URL(raw, 'http://x');
+  } catch {
+    return '/';
+  }
+  if (u.origin !== 'http://x' || !u.pathname.startsWith('/')) return '/';
+  return u.pathname + u.search;
 }
 
 // ── KV metadata scan helper ─────────────────────────────────────────────────
@@ -230,56 +252,48 @@ app.use('/api/dev/*', async (c, next) => {
 });
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
+// Resolves the caller on every /api/* request (dev stub → Access JWT → null).
+// Only /api/auth/* is reachable anonymously; everything else 401s without a user.
 
 app.use('/api/*', async (c, next) => {
+  const user = await resolveUser(c);
+  c.set('user', user);
   const path = new URL(c.req.url).pathname;
-  if (path === '/api/auth/login' || path === '/api/auth/check') {
-    return next();
-  }
-  if (isDevEnv(c.env)) return next();
-  const token = getCookie(c, 'auth');
-  if (!(await verifySignedCookie(token, c.env.COOKIE_SECRET))) {
-    const log = c.get('logger');
-    log.warn('auth.unauthorized', { path });
+  if (path.startsWith('/api/auth/')) return next();
+  if (!user) {
+    c.get('logger').warn('auth.unauthorized', { path });
     return c.json({ error: 'Unauthorized' }, 401);
   }
   return next();
 });
 
 // ── Auth routes ─────────────────────────────────────────────────────────────
+// /api/auth/login is the only path gated by Cloudflare Access. Access
+// authenticates, sets CF_Authorization on this domain, then forwards here.
 
-app.post('/api/auth/login', async (c) => {
-  const { password } = await c.req.json();
-  if (password !== c.env.ACCESS_PASSWORD) {
-    const log = c.get('logger');
-    log.warn('auth.failure', { reason: 'invalid_password' });
-    return c.json({ error: 'Invalid password' }, 401);
+app.get('/api/auth/login', async (c) => {
+  const user = c.get('user');
+  const next = safeNext(c.req.query('next'));
+  if (!user) {
+    c.get('logger').warn('auth.login_without_token');
+    return c.redirect('/', 302);
   }
-  const value = 'authenticated';
-  const sig = await signValue(value, c.env.COOKIE_SECRET);
-  const signed = `${value}.${sig}`;
-  setCookie(c, 'auth', signed, {
-    httpOnly: true,
-    sameSite: 'Lax',
-    path: '/',
-    maxAge: 60 * 60 * 24 * 30,
-  });
-  const log = c.get('logger');
-  log.info('auth.login');
-  return c.json({ success: true });
+  await upsertUser(c.env.HISTORY, user);
+  c.get('logger').info('auth.login', { userId: user.id });
+  return c.redirect(next, 302);
 });
 
 app.post('/api/auth/logout', (c) => {
-  deleteCookie(c, 'auth', { path: '/' });
-  const log = c.get('logger');
-  log.info('auth.logout');
-  return c.json({ success: true });
+  deleteCookie(c, ACCESS_COOKIE, { path: '/' });
+  c.get('logger').info('auth.logout');
+  return c.json({ redirect: '/cdn-cgi/access/logout' });
 });
 
-app.get('/api/auth/check', async (c) => {
-  if (isDevEnv(c.env)) return c.json({ authenticated: true, stub: c.env.AUTH_STUB_USER });
-  const token = getCookie(c, 'auth');
-  return c.json({ authenticated: await verifySignedCookie(token, c.env.COOKIE_SECRET) });
+app.get('/api/auth/check', (c) => {
+  const user = c.get('user');
+  const body = { authenticated: Boolean(user), user };
+  if (isDevEnv(c.env)) return c.json({ ...body, stub: c.env.AUTH_STUB_USER });
+  return c.json(body);
 });
 
 // ── Dev routes (UAT only) ───────────────────────────────────────────────────

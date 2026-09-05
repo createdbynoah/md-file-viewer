@@ -36,6 +36,10 @@
     "LOG_LEVEL": "info",
     // Pinned so isDevEnv() can never be true in production (see src/worker.js)
     "ENVIRONMENT": "production",
+    // Cloudflare Access application (Zero Trust > Access > Applications).
+    // Fill in after creating the app per docs/DEPLOYMENT.md. Not secrets.
+    "ACCESS_AUD": "e058d2efd575f343a4a5f6afdcfca400702124cefe076b9e51ed59ea570c4624",
+    "ACCESS_TEAM_DOMAIN": "noahcancode.cloudflareaccess.com",
   },
   // Built-in observability (Workers Logs)
   "observability": {
@@ -47,7 +51,12 @@
     "uat": {
       "r2_buckets": [{ "binding": "MD_FILES", "bucket_name": "md-file-viewer-files" }],
       "kv_namespaces": [{ "binding": "HISTORY", "id": "4b5e3a41933d4e08b4e048d12d095a96" }],
-      "vars": { "LOG_LEVEL": "debug", "ENVIRONMENT": "uat" },
+      "vars": {
+        "LOG_LEVEL": "debug",
+        "ENVIRONMENT": "uat",
+        "ACCESS_AUD": "uat-aud",
+        "ACCESS_TEAM_DOMAIN": "uat.cloudflareaccess.com",
+      },
     },
   },
 }

@@ -41,9 +41,7 @@ const md = window.markdownit({
 
 const loginScreen = document.getElementById('login-screen');
 const appScreen = document.getElementById('app-screen');
-const loginForm = document.getElementById('login-form');
-const loginPassword = document.getElementById('login-password');
-const loginError = document.getElementById('login-error');
+const loginLink = document.getElementById('login-link');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
@@ -315,10 +313,16 @@ async function api(path, opts = {}) {
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
+// currentUser isn't consumed elsewhere yet, but is set here so the /api/auth/check
+// response shape is handled in one place.
+// eslint-disable-next-line no-unused-vars
+let currentUser = null;
+
 async function checkAuth() {
   try {
     const res = await api('/api/auth/check');
     const data = await res.json();
+    currentUser = data.user || null;
     if (data.authenticated) {
       showApp();
     } else {
@@ -330,6 +334,9 @@ async function checkAuth() {
 }
 
 function showLogin() {
+  // Return to the current note after sign-in (same-origin path only; server re-validates).
+  const next = location.pathname !== '/' ? `?next=${encodeURIComponent(location.pathname)}` : '';
+  loginLink.href = `/api/auth/login${next}`;
   loginScreen.hidden = false;
   appScreen.hidden = true;
   stopPolling();
@@ -349,28 +356,15 @@ function showApp() {
   }
 }
 
-loginForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  loginError.hidden = true;
-  try {
-    const res = await api('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ password: loginPassword.value }),
-    });
-    if (res.ok) {
-      loginPassword.value = '';
-      showApp();
-    } else {
-      loginError.hidden = false;
-    }
-  } catch {
-    loginError.hidden = false;
-  }
-});
-
 logoutBtn.addEventListener('click', async () => {
-  await api('/api/auth/logout', { method: 'POST' });
-  showLogin();
+  currentUser = null;
+  const res = await api('/api/auth/logout', { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (data.redirect) {
+    location.href = data.redirect;
+  } else {
+    showLogin();
+  }
 });
 
 // ── Theme ───────────────────────────────────────────────────────────────────
