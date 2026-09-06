@@ -151,6 +151,16 @@ describe('revisions', () => {
     expect(await env.HISTORY.get(`rev:${c}`)).toBeNull();
   });
 
+  it('404s when the note content object is missing and writes no revision', async () => {
+    const env = alice();
+    const id = await paste('v0', 'Note', env);
+    await env.MD_FILES.delete(`${id}.md`);
+    const res = await put(env, id, { content: 'v1' });
+    expect(res.status).toBe(404);
+    expect(await env.MD_FILES.get(`${id}/r/0.md`)).toBeNull();
+    expect(await env.HISTORY.get(`rev:${id}`)).toBeNull();
+  });
+
   it('upload and paste reject content over the size cap', async () => {
     const env = alice();
     const big = 'x'.repeat(2 * 1024 * 1024 + 1);

@@ -1093,6 +1093,8 @@ function showInputArea({ updateUrl = true } = {}) {
 
 // ── Edit mode ───────────────────────────────────────────────────────────────
 
+let saving = false;
+
 function enterEditMode() {
   if (!currentNote || !currentNote.owned || currentRawMarkdown == null) return;
   editing = true;
@@ -1122,12 +1124,13 @@ function exitEditMode() {
 }
 
 async function saveEdit() {
-  if (!editing || !currentNote) return;
+  if (!editing || !currentNote || saving) return;
   const content = editorInput.value;
   if (content === currentRawMarkdown) {
     exitEditMode();
     return;
   }
+  saving = true;
   editorSaveBtn.disabled = true;
   try {
     const res = await api(`/api/files/${encodeURIComponent(currentNote.id)}`, {
@@ -1147,9 +1150,13 @@ async function saveEdit() {
     closeRevisions();
     exitEditMode();
     syncSidebar('file-edit');
-  } catch {
-    /* api() already redirected on 401 */
+  } catch (e) {
+    // api() already redirected on 401; anything else is a network failure.
+    if (e.message !== 'Unauthorized') {
+      alert('Save failed — check your connection and try again.');
+    }
   } finally {
+    saving = false;
     editorSaveBtn.disabled = false;
   }
 }
@@ -1196,6 +1203,8 @@ const revDiff = document.getElementById('rev-diff');
 const revisionsCloseBtn = document.getElementById('revisions-close-btn');
 let revisions = [];
 const snapshotCache = new Map(); // `${id}:${n}` → text
+// True while the main article shows a revision snapshot instead of the note.
+let snapshotShown = false;
 
 function escapeHtml(s) {
   return String(s).replace(
@@ -1242,7 +1251,7 @@ async function openRevisions() {
     li.dataset.n = String(r.n);
     // `by` is only sent to the owner; non-owners get an empty cell.
     li.innerHTML =
-      `<span>#${r.n}</span><span>${escapeHtml(fmtWhen(r.at))}</span>` +
+      `<span>#${Number(r.n)}</span><span>${escapeHtml(fmtWhen(r.at))}</span>` +
       `<span>${escapeHtml(r.by || '')}</span><span>${escapeHtml(r.message || '')}</span>` +
       `<span>${Number(r.bytes)} B</span>`;
     li.addEventListener('click', () => {
@@ -1266,6 +1275,17 @@ async function openRevisions() {
 
 function closeRevisions() {
   revisionsDrawer.hidden = true;
+  // Closing the drawer while a snapshot is on screen restores the current note.
+  if (snapshotShown) {
+    snapshotShown = false;
+    if (currentNote && currentRawMarkdown != null) {
+      renderMarkdown(
+        currentRawMarkdown,
+        currentFilename,
+        currentNote.owned ? currentNote.id : null
+      );
+    }
+  }
 }
 
 async function showDiff(fromN, toN) {
@@ -1312,6 +1332,7 @@ revViewBtn.addEventListener('click', async () => {
     addCodeCopyButtons();
     wrapTables();
     viewerTitle.textContent = `${currentFilename} — revision #${n}`;
+    snapshotShown = true;
   } catch {
     revDiff.textContent = 'Could not load revisions.';
   }

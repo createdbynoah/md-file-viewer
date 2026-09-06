@@ -653,7 +653,11 @@ app.put('/api/files/:id', async (c) => {
     return c.json({ error: 'File not found' }, 404);
   }
   const currentObj = await c.env.MD_FILES.get(`${id}.md`);
-  const current = currentObj ? await currentObj.text() : '';
+  if (!currentObj) {
+    log.warn('file.notFound', { fileId: id });
+    return c.json({ error: 'File not found' }, 404);
+  }
+  const current = await currentObj.text();
   if (content === current) {
     return c.json({ error: 'No changes' }, 400);
   }
