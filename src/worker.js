@@ -41,6 +41,9 @@ async function readJsonArray(kv, key) {
 // ── History helpers (per user) ──────────────────────────────────────────────
 
 const HISTORY_MAX = 100;
+const MAX_NOTE_BYTES = 2 * 1024 * 1024;
+const REVISIONS_MAX = 100;
+const MESSAGE_MAX = 200;
 
 async function readHistory(kv, userId) {
   return readJsonArray(kv, historyKey(userId));
@@ -80,6 +83,35 @@ async function touchMeta(kv, id) {
   } catch {
     /* leave metadata unchanged on parse error */
   }
+}
+
+// ── Revisions ───────────────────────────────────────────────────────────────
+// rev:{uuid} = [{ n, at, by, message, bytes }] newest first, cap REVISIONS_MAX.
+// Snapshot n lives at R2 `{uuid}/r/{n}.md`; `{uuid}.md` is always the latest.
+
+const revKey = (id) => `rev:${id}`;
+const snapshotKey = (id, n) => `${id}/r/${n}.md`;
+
+async function readRevisions(kv, id) {
+  return readJsonArray(kv, revKey(id));
+}
+
+/** Remove a note's current object, every snapshot, and its revision log. */
+async function deleteNoteObjects(env, id) {
+  await env.MD_FILES.delete(`${id}.md`);
+  let cursor;
+  while (true) {
+    const page = await env.MD_FILES.list({ prefix: `${id}/r/`, cursor });
+    if (page.objects.length) await env.MD_FILES.delete(page.objects.map((o) => o.key));
+    if (!page.truncated) break;
+    cursor = page.cursor;
+  }
+  await env.HISTORY.delete(revKey(id));
+}
+
+function cleanMessage(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.trim().slice(0, MESSAGE_MAX);
 }
 
 // ── Owner note index ────────────────────────────────────────────────────────
@@ -245,7 +277,7 @@ function canRead(meta, user) {
   return meta.ownerId === user.id;
 }
 
-const PUBLIC_FILE_RE = /^\/api\/files\/[^/]+$/;
+const PUBLIC_READ_RE = /^\/api\/files\/[^/]+(\/revisions(\/[^/]+)?)?$/;
 
 // ── Retention cron handler ──────────────────────────────────────────────────
 // Runs daily at 03:00 UTC. Archives after 30 days of inactivity, deletes after 60.
@@ -293,7 +325,7 @@ async function runRetention(env, log) {
 
     if (age >= DELETE_MS) {
       await env.HISTORY.delete(`meta:${id}`);
-      await env.MD_FILES.delete(`${id}.md`);
+      await deleteNoteObjects(env, id);
       deletedIds.push(id);
       if (meta.ownerId) {
         if (!deletedByOwner.has(meta.ownerId)) deletedByOwner.set(meta.ownerId, []);
@@ -362,7 +394,7 @@ app.use('/api/*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   if (path.startsWith('/api/auth/')) return next();
   // Note reads are visibility-checked in the handler (link notes are public).
-  if (c.req.method === 'GET' && PUBLIC_FILE_RE.test(path)) return next();
+  if (c.req.method === 'GET' && PUBLIC_READ_RE.test(path)) return next();
   if (!user) {
     c.get('logger').warn('auth.unauthorized', { path });
     return c.json({ error: 'Unauthorized' }, 401);
@@ -430,6 +462,9 @@ app.post('/api/upload', async (c) => {
   const user = c.get('user');
   const id = crypto.randomUUID();
   const content = await file.text();
+  if (content.length > MAX_NOTE_BYTES) {
+    return c.json({ error: 'Note too large (max 2 MB)' }, 400);
+  }
   const meta = newMeta({
     filename: originalName,
     source: 'upload',
@@ -452,6 +487,9 @@ app.post('/api/paste', async (c) => {
   const { content, title } = await c.req.json();
   if (!content || typeof content !== 'string') {
     return c.json({ error: 'No content provided' }, 400);
+  }
+  if (content.length > MAX_NOTE_BYTES) {
+    return c.json({ error: 'Note too large (max 2 MB)' }, 400);
   }
 
   const user = c.get('user');
@@ -535,6 +573,7 @@ app.get('/api/files/:id', async (c) => {
     created: meta.created || null,
     owned: isOwner(meta, user),
     visibility: meta.visibility || 'private',
+    currentRev: meta.currentRev || 0,
   });
 });
 
@@ -589,6 +628,103 @@ app.patch('/api/files/:id/visibility', async (c) => {
   return c.json({ id, visibility });
 });
 
+// ── Edit + revisions ────────────────────────────────────────────────────────
+
+app.put('/api/files/:id', async (c) => {
+  const id = c.req.param('id');
+  const user = c.get('user');
+  const log = c.get('logger');
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+  const { content } = body;
+  if (!content || typeof content !== 'string') {
+    return c.json({ error: 'No content provided' }, 400);
+  }
+  if (content.length > MAX_NOTE_BYTES) {
+    return c.json({ error: 'Note too large (max 2 MB)' }, 400);
+  }
+  const meta = await loadMeta(c.env.HISTORY, id);
+  if (!meta || !isOwner(meta, user)) {
+    log.warn('file.notFound', { fileId: id });
+    return c.json({ error: 'File not found' }, 404);
+  }
+  const currentObj = await c.env.MD_FILES.get(`${id}.md`);
+  const current = currentObj ? await currentObj.text() : '';
+  if (content === current) {
+    return c.json({ error: 'No changes' }, 400);
+  }
+
+  const revisions = await readRevisions(c.env.HISTORY, id);
+  const currentRev = meta.currentRev || 0;
+  const now = new Date().toISOString();
+
+  // Lazily snapshot the original as revision 0 on the first edit.
+  if (currentRev === 0 && !revisions.some((r) => r.n === 0)) {
+    await c.env.MD_FILES.put(snapshotKey(id, 0), current);
+    revisions.unshift({
+      n: 0,
+      at: meta.created || now,
+      by: user.email,
+      message: 'Original',
+      bytes: current.length,
+    });
+  }
+
+  const n = currentRev + 1;
+  const revision = {
+    n,
+    at: now,
+    by: user.email,
+    message: cleanMessage(body.message),
+    bytes: content.length,
+  };
+  await c.env.MD_FILES.put(snapshotKey(id, n), content);
+  await c.env.MD_FILES.put(`${id}.md`, content);
+  revisions.unshift(revision);
+  while (revisions.length > REVISIONS_MAX) {
+    const evicted = revisions.pop();
+    await c.env.MD_FILES.delete(snapshotKey(id, evicted.n));
+  }
+  await c.env.HISTORY.put(revKey(id), JSON.stringify(revisions));
+
+  meta.currentRev = n;
+  meta.size = content.length;
+  meta.lastAccessedAt = now;
+  delete meta.archivedAt;
+  await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
+
+  log.info('file.edit', { fileId: id, rev: n, bytes: content.length });
+  return c.json({ id, currentRev: n, revision });
+});
+
+app.get('/api/files/:id/revisions', async (c) => {
+  const id = c.req.param('id');
+  const meta = await loadMeta(c.env.HISTORY, id);
+  if (!meta || !canRead(meta, c.get('user'))) {
+    return c.json({ error: 'File not found' }, 404);
+  }
+  return c.json(await readRevisions(c.env.HISTORY, id));
+});
+
+app.get('/api/files/:id/revisions/:n', async (c) => {
+  const id = c.req.param('id');
+  const meta = await loadMeta(c.env.HISTORY, id);
+  if (!meta || !canRead(meta, c.get('user'))) {
+    return c.json({ error: 'File not found' }, 404);
+  }
+  if (!/^\d+$/.test(c.req.param('n'))) return c.json({ error: 'Revision not found' }, 404);
+  const n = Number(c.req.param('n'));
+  const revisions = await readRevisions(c.env.HISTORY, id);
+  if (!revisions.some((r) => r.n === n)) return c.json({ error: 'Revision not found' }, 404);
+  const obj = await c.env.MD_FILES.get(snapshotKey(id, n));
+  if (!obj) return c.json({ error: 'Revision not found' }, 404);
+  return c.body(await obj.text(), 200, { 'content-type': 'text/markdown; charset=utf-8' });
+});
+
 // ── File delete ─────────────────────────────────────────────────────────────
 
 app.delete('/api/files/:id', async (c) => {
@@ -600,7 +736,7 @@ app.delete('/api/files/:id', async (c) => {
     return c.json({ error: 'File not found' }, 404);
   }
 
-  await c.env.MD_FILES.delete(`${id}.md`);
+  await deleteNoteObjects(c.env, id);
   await c.env.HISTORY.delete(`meta:${id}`);
   await removeFromNoteIndex(c.env.HISTORY, user.id, id);
 
@@ -744,7 +880,7 @@ app.delete('/api/folders/:id', async (c) => {
   for (const fid of folder.fileIds) {
     const meta = await loadMeta(c.env.HISTORY, fid);
     if (!meta || !isOwner(meta, user)) continue;
-    await c.env.MD_FILES.delete(`${fid}.md`);
+    await deleteNoteObjects(c.env, fid);
     await c.env.HISTORY.delete(`meta:${fid}`);
     await removeFromNoteIndex(c.env.HISTORY, user.id, fid);
     deletedIds.push(fid);

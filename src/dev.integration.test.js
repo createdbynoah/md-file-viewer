@@ -36,7 +36,7 @@ describe('dev gate', () => {
     });
     const seed = await call('/api/dev/seed', { method: 'POST' }, env);
     expect(seed.status).toBe(200);
-    expect(await seed.json()).toMatchObject({ ok: true, notes: 11, folders: 3 });
+    expect(await seed.json()).toMatchObject({ ok: true, notes: 11, folders: 3, revisions: 2 });
     const files = await (await call('/api/files', {}, env)).json();
     expect(files).toHaveLength(7); // own, non-archived
     const folders = await (await call('/api/folders', {}, env)).json();
@@ -51,6 +51,8 @@ describe('dev gate', () => {
     expect(other.map((f) => f.id).sort()).toEqual(
       [SEED_IDS.otherLink, SEED_IDS.otherPrivate].sort()
     );
+    const revs = await (await call(`/api/files/${SEED_IDS.code}/revisions`, {}, env)).json();
+    expect(revs.map((r) => r.n)).toEqual([2, 1, 0]);
   });
 
   it('seed is idempotent and retention can be triggered', async () => {

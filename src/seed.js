@@ -106,6 +106,10 @@ function note(
   return { id, content, meta };
 }
 
+// Revisions for the drawer/diff UAT: original + two edits on "Code blocks".
+const codeV1 = CODE.replace('Inline `code` too.', 'Inline `code` too. Edited once.');
+const codeV2 = codeV1 + '\nSecond edit appends a line.\n';
+
 export async function seedScenarios(env) {
   // Wipe
   const keys = await env.HISTORY.list();
@@ -127,7 +131,7 @@ export async function seedScenarios(env) {
   const notes = [
     note(SEED_IDS.short, 'Short note.md', '# Hello\n\nA very short note.\n', { source: 'upload' }),
     note(SEED_IDS.wide, 'Wide table', WIDE_TABLE, { createdDays: 1, visibility: 'link' }),
-    note(SEED_IDS.code, 'Code blocks', CODE, { createdDays: 2 }),
+    note(SEED_IDS.code, 'Code blocks', codeV2, { createdDays: 2 }),
     note(SEED_IDS.long, 'Long note', LONG, { createdDays: 8 }),
     note(SEED_IDS.folderA1, 'Alpha spec.md', '# Alpha spec\n\n- goal\n- scope\n', {
       createdDays: 10,
@@ -163,11 +167,30 @@ export async function seedScenarios(env) {
     }),
   ];
 
+  // "Code blocks" ships with a revision history (see codeRevisions below).
+  notes.find((n) => n.id === SEED_IDS.code).meta.currentRev = 2;
+
   for (const n of notes) {
     await env.MD_FILES.put(`${n.id}.md`, n.content);
     await env.HISTORY.put(`meta:${n.id}`, JSON.stringify(n.meta));
   }
   await env.HISTORY.put(`folders:${OWNER}`, JSON.stringify(folders));
+
+  const codeRevisions = [
+    { n: 2, at: ago(1), by: `${OWNER}@dev.local`, message: 'Append a line', bytes: codeV2.length },
+    {
+      n: 1,
+      at: ago(1.5),
+      by: `${OWNER}@dev.local`,
+      message: 'Tweak inline code',
+      bytes: codeV1.length,
+    },
+    { n: 0, at: ago(2), by: `${OWNER}@dev.local`, message: 'Original', bytes: CODE.length },
+  ];
+  await env.MD_FILES.put(`${SEED_IDS.code}/r/0.md`, CODE);
+  await env.MD_FILES.put(`${SEED_IDS.code}/r/1.md`, codeV1);
+  await env.MD_FILES.put(`${SEED_IDS.code}/r/2.md`, codeV2);
+  await env.HISTORY.put(`rev:${SEED_IDS.code}`, JSON.stringify(codeRevisions));
 
   const notesByOwner = (ownerId) =>
     notes
@@ -188,5 +211,10 @@ export async function seedScenarios(env) {
   ];
   await env.HISTORY.put(`history:${OWNER}`, JSON.stringify(history));
 
-  return { notes: notes.length, folders: folders.length, history: history.length };
+  return {
+    notes: notes.length,
+    folders: folders.length,
+    history: history.length,
+    revisions: codeRevisions.length - 1,
+  };
 }
