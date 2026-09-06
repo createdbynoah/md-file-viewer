@@ -75,11 +75,20 @@ const copyLinkBtn = document.getElementById('copy-link-btn');
 const userEmail = document.getElementById('user-email');
 const topbar = document.querySelector('.topbar');
 const viewerScroll = document.querySelector('.viewer-scroll');
+const editBtn = document.getElementById('edit-btn');
+const historyBtn = document.getElementById('history-btn');
+const editorArea = document.getElementById('editor-area');
+const editorInput = document.getElementById('editor-input');
+const editorMessage = document.getElementById('editor-message');
+const editorPreviewBtn = document.getElementById('editor-preview-btn');
+const editorCancelBtn = document.getElementById('editor-cancel-btn');
+const editorSaveBtn = document.getElementById('editor-save-btn');
 
 let foldersData = [];
 let currentFileId = null;
 let currentRawMarkdown = null;
 let currentFilename = null;
+let editing = false;
 
 // ── Sidebar polling ─────────────────────────────────────────────────────────
 
@@ -293,6 +302,11 @@ function extractTitle(markdown) {
 }
 
 window.addEventListener('popstate', () => {
+  if (document.body.classList.contains('read-only')) {
+    // Anonymous read-only page: any in-app navigation needs a sign-in.
+    location.reload();
+    return;
+  }
   const id = getFileIdFromPath();
   if (id) {
     viewFile(id, { updateUrl: false });
@@ -318,7 +332,7 @@ async function api(path, opts = {}) {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 let currentUser = null;
-let currentNote = null; // { id, owned, visibility }
+let currentNote = null; // { id, owned, visibility, currentRev }
 
 async function checkAuth() {
   try {
@@ -350,7 +364,7 @@ async function tryLoadPublicFile(id) {
   topbarSignin.hidden = false;
   topbarSignin.href = `/api/auth/login?next=${encodeURIComponent(location.pathname)}`;
   currentRawMarkdown = data.content;
-  currentNote = { id, owned: false, visibility: data.visibility };
+  currentNote = { id, owned: false, visibility: data.visibility, currentRev: data.currentRev || 0 };
   renderMarkdown(data.content, data.filename, null);
   copyMdBtn.hidden = false;
   applyOwnerControls();
@@ -930,6 +944,7 @@ function getCurrentFileFolderId() {
 // ── File viewing ────────────────────────────────────────────────────────────
 
 async function viewFile(id, { updateUrl = true } = {}) {
+  if (editing) exitEditMode();
   try {
     const res = await api(`/api/files/${encodeURIComponent(id)}`);
     if (!res.ok) return;
@@ -937,7 +952,12 @@ async function viewFile(id, { updateUrl = true } = {}) {
     currentRawMarkdown = data.content;
     renderMarkdown(data.content, data.filename, data.owned ? id : null);
     currentFileId = id;
-    currentNote = { id, owned: Boolean(data.owned), visibility: data.visibility || 'private' };
+    currentNote = {
+      id,
+      owned: Boolean(data.owned),
+      visibility: data.visibility || 'private',
+      currentRev: data.currentRev || 0,
+    };
     copyMdBtn.hidden = false;
     applyOwnerControls();
     if (data.created) {
@@ -965,6 +985,8 @@ function applyOwnerControls() {
   deleteFileBtn.hidden = !owned;
   folderBtn.hidden = !owned;
   visibilityBtn.hidden = !owned;
+  editBtn.hidden = !owned || editing;
+  historyBtn.hidden = !currentNote;
   copyLinkBtn.hidden = !(currentNote && currentNote.visibility === 'link');
   if (owned) {
     visibilityBtn.textContent =
@@ -1043,6 +1065,7 @@ function wrapTables() {
 }
 
 function showInputArea({ updateUrl = true } = {}) {
+  if (editing) exitEditMode();
   inputArea.hidden = false;
   viewerArea.hidden = true;
   viewerScroll.scrollTop = 0;
@@ -1056,12 +1079,100 @@ function showInputArea({ updateUrl = true } = {}) {
   copyMdBtn.hidden = true;
   folderBtn.hidden = true;
   visibilityBtn.hidden = true;
+  editBtn.hidden = true;
+  historyBtn.hidden = true;
   copyLinkBtn.hidden = true;
   deleteFileBtn.hidden = true;
   folderDropdown.hidden = true;
   viewerCreated.hidden = true;
   if (updateUrl) pushUrl('/');
 }
+
+// ── Edit mode ───────────────────────────────────────────────────────────────
+
+function enterEditMode() {
+  if (!currentNote || !currentNote.owned || currentRawMarkdown == null) return;
+  editing = true;
+  editorInput.value = currentRawMarkdown;
+  editorInput.hidden = false;
+  editorMessage.value = '';
+  renderedOutput.hidden = true;
+  editorArea.hidden = false;
+  editorPreviewBtn.textContent = 'Preview';
+  applyOwnerControls();
+  editorInput.focus();
+}
+
+// Leaves the editor and restores the rendered view of the saved content, so a
+// cancelled preview never leaves the draft on screen.
+function exitEditMode() {
+  editing = false;
+  editorArea.hidden = true;
+  editorInput.hidden = false;
+  editorInput.value = '';
+  editorMessage.value = '';
+  renderedOutput.hidden = false;
+  if (currentNote && currentRawMarkdown != null) {
+    renderMarkdown(currentRawMarkdown, currentFilename, currentNote.owned ? currentNote.id : null);
+  }
+  applyOwnerControls();
+}
+
+async function saveEdit() {
+  if (!editing || !currentNote) return;
+  const content = editorInput.value;
+  if (content === currentRawMarkdown) {
+    exitEditMode();
+    return;
+  }
+  editorSaveBtn.disabled = true;
+  try {
+    const res = await api(`/api/files/${encodeURIComponent(currentNote.id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content, message: editorMessage.value }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || 'Save failed');
+      return;
+    }
+    const data = await res.json();
+    currentRawMarkdown = content;
+    currentNote.currentRev = data.currentRev;
+    exitEditMode();
+    syncSidebar('file-edit');
+  } catch {
+    /* api() already redirected on 401 */
+  } finally {
+    editorSaveBtn.disabled = false;
+  }
+}
+
+editBtn.addEventListener('click', enterEditMode);
+editorCancelBtn.addEventListener('click', exitEditMode);
+editorSaveBtn.addEventListener('click', saveEdit);
+editorPreviewBtn.addEventListener('click', () => {
+  // Toggle between the textarea and a live render of the draft.
+  const showingPreview = !renderedOutput.hidden;
+  if (showingPreview) {
+    renderedOutput.hidden = true;
+    editorInput.hidden = false;
+    editorPreviewBtn.textContent = 'Preview';
+  } else {
+    renderedOutput.innerHTML = md.render(editorInput.value);
+    addCodeCopyButtons();
+    wrapTables();
+    renderedOutput.hidden = false;
+    editorInput.hidden = true;
+    editorPreviewBtn.textContent = 'Edit';
+  }
+});
+editorInput.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveEdit();
+  }
+});
 
 backBtn.addEventListener('click', showInputArea);
 

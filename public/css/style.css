@@ -1161,6 +1161,13 @@ body {
   border-top: 1px solid var(--border);
   font-size: 0.8125rem;
   color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.user-email {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1171,4 +1178,40 @@ body.read-only #sidebar-toggle,
 body.read-only #sidebar-overlay,
 body.read-only #back-btn {
   display: none !important;
+}
+
+.editor-area {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.editor-input {
+  width: 100%;
+  min-height: 60vh;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.editor-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.editor-message {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
 }
