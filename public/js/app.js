@@ -75,11 +75,20 @@ const copyLinkBtn = document.getElementById('copy-link-btn');
 const userEmail = document.getElementById('user-email');
 const topbar = document.querySelector('.topbar');
 const viewerScroll = document.querySelector('.viewer-scroll');
+const editBtn = document.getElementById('edit-btn');
+const historyBtn = document.getElementById('history-btn');
+const editorArea = document.getElementById('editor-area');
+const editorInput = document.getElementById('editor-input');
+const editorMessage = document.getElementById('editor-message');
+const editorPreviewBtn = document.getElementById('editor-preview-btn');
+const editorCancelBtn = document.getElementById('editor-cancel-btn');
+const editorSaveBtn = document.getElementById('editor-save-btn');
 
 let foldersData = [];
 let currentFileId = null;
 let currentRawMarkdown = null;
 let currentFilename = null;
+let editing = false;
 
 // ── Sidebar polling ─────────────────────────────────────────────────────────
 
@@ -293,6 +302,11 @@ function extractTitle(markdown) {
 }
 
 window.addEventListener('popstate', () => {
+  if (document.body.classList.contains('read-only')) {
+    // Anonymous read-only page: any in-app navigation needs a sign-in.
+    location.reload();
+    return;
+  }
   const id = getFileIdFromPath();
   if (id) {
     viewFile(id, { updateUrl: false });
@@ -318,7 +332,7 @@ async function api(path, opts = {}) {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 let currentUser = null;
-let currentNote = null; // { id, owned, visibility }
+let currentNote = null; // { id, owned, visibility, currentRev }
 
 async function checkAuth() {
   try {
@@ -340,6 +354,7 @@ async function checkAuth() {
 // Anonymous visitor on a /<id> link: render read-only if the note is shared.
 // Uses plain fetch, not api(), so a 401/404 never bounces through showLogin().
 async function tryLoadPublicFile(id) {
+  closeRevisions();
   const res = await fetch(`/api/files/${encodeURIComponent(id)}`);
   if (!res.ok) return false;
   const data = await res.json();
@@ -350,7 +365,7 @@ async function tryLoadPublicFile(id) {
   topbarSignin.hidden = false;
   topbarSignin.href = `/api/auth/login?next=${encodeURIComponent(location.pathname)}`;
   currentRawMarkdown = data.content;
-  currentNote = { id, owned: false, visibility: data.visibility };
+  currentNote = { id, owned: false, visibility: data.visibility, currentRev: data.currentRev || 0 };
   renderMarkdown(data.content, data.filename, null);
   copyMdBtn.hidden = false;
   applyOwnerControls();
@@ -930,6 +945,8 @@ function getCurrentFileFolderId() {
 // ── File viewing ────────────────────────────────────────────────────────────
 
 async function viewFile(id, { updateUrl = true } = {}) {
+  if (editing) exitEditMode();
+  closeRevisions();
   try {
     const res = await api(`/api/files/${encodeURIComponent(id)}`);
     if (!res.ok) return;
@@ -937,7 +954,12 @@ async function viewFile(id, { updateUrl = true } = {}) {
     currentRawMarkdown = data.content;
     renderMarkdown(data.content, data.filename, data.owned ? id : null);
     currentFileId = id;
-    currentNote = { id, owned: Boolean(data.owned), visibility: data.visibility || 'private' };
+    currentNote = {
+      id,
+      owned: Boolean(data.owned),
+      visibility: data.visibility || 'private',
+      currentRev: data.currentRev || 0,
+    };
     copyMdBtn.hidden = false;
     applyOwnerControls();
     if (data.created) {
@@ -965,6 +987,8 @@ function applyOwnerControls() {
   deleteFileBtn.hidden = !owned;
   folderBtn.hidden = !owned;
   visibilityBtn.hidden = !owned;
+  editBtn.hidden = !owned || editing;
+  historyBtn.hidden = !currentNote;
   copyLinkBtn.hidden = !(currentNote && currentNote.visibility === 'link');
   if (owned) {
     visibilityBtn.textContent =
@@ -1043,6 +1067,8 @@ function wrapTables() {
 }
 
 function showInputArea({ updateUrl = true } = {}) {
+  if (editing) exitEditMode();
+  closeRevisions();
   inputArea.hidden = false;
   viewerArea.hidden = true;
   viewerScroll.scrollTop = 0;
@@ -1056,6 +1082,8 @@ function showInputArea({ updateUrl = true } = {}) {
   copyMdBtn.hidden = true;
   folderBtn.hidden = true;
   visibilityBtn.hidden = true;
+  editBtn.hidden = true;
+  historyBtn.hidden = true;
   copyLinkBtn.hidden = true;
   deleteFileBtn.hidden = true;
   folderDropdown.hidden = true;
@@ -1063,7 +1091,252 @@ function showInputArea({ updateUrl = true } = {}) {
   if (updateUrl) pushUrl('/');
 }
 
+// ── Edit mode ───────────────────────────────────────────────────────────────
+
+let saving = false;
+
+function enterEditMode() {
+  if (!currentNote || !currentNote.owned || currentRawMarkdown == null) return;
+  editing = true;
+  editorInput.value = currentRawMarkdown;
+  editorInput.hidden = false;
+  editorMessage.value = '';
+  renderedOutput.hidden = true;
+  editorArea.hidden = false;
+  editorPreviewBtn.textContent = 'Preview';
+  applyOwnerControls();
+  editorInput.focus();
+}
+
+// Leaves the editor and restores the rendered view of the saved content, so a
+// cancelled preview never leaves the draft on screen.
+function exitEditMode() {
+  editing = false;
+  editorArea.hidden = true;
+  editorInput.hidden = false;
+  editorInput.value = '';
+  editorMessage.value = '';
+  renderedOutput.hidden = false;
+  if (currentNote && currentRawMarkdown != null) {
+    renderMarkdown(currentRawMarkdown, currentFilename, currentNote.owned ? currentNote.id : null);
+  }
+  applyOwnerControls();
+}
+
+async function saveEdit() {
+  if (!editing || !currentNote || saving) return;
+  const content = editorInput.value;
+  if (content === currentRawMarkdown) {
+    exitEditMode();
+    return;
+  }
+  saving = true;
+  editorSaveBtn.disabled = true;
+  try {
+    const res = await api(`/api/files/${encodeURIComponent(currentNote.id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content, message: editorMessage.value }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || 'Save failed');
+      return;
+    }
+    const data = await res.json();
+    currentRawMarkdown = content;
+    currentNote.currentRev = data.currentRev;
+    // The saved edit adds a revision; drop cached snapshots and reset the drawer.
+    snapshotCache.clear();
+    closeRevisions();
+    exitEditMode();
+    syncSidebar('file-edit');
+  } catch (e) {
+    // api() already redirected on 401; anything else is a network failure.
+    if (e.message !== 'Unauthorized') {
+      alert('Save failed — check your connection and try again.');
+    }
+  } finally {
+    saving = false;
+    editorSaveBtn.disabled = false;
+  }
+}
+
+editBtn.addEventListener('click', enterEditMode);
+editorCancelBtn.addEventListener('click', exitEditMode);
+editorSaveBtn.addEventListener('click', saveEdit);
+editorPreviewBtn.addEventListener('click', () => {
+  // Toggle between the textarea and a live render of the draft.
+  const showingPreview = !renderedOutput.hidden;
+  if (showingPreview) {
+    renderedOutput.hidden = true;
+    editorInput.hidden = false;
+    editorPreviewBtn.textContent = 'Preview';
+  } else {
+    renderedOutput.innerHTML = md.render(editorInput.value);
+    addCodeCopyButtons();
+    wrapTables();
+    renderedOutput.hidden = false;
+    editorInput.hidden = true;
+    editorPreviewBtn.textContent = 'Edit';
+  }
+});
+editorInput.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveEdit();
+  }
+});
+
 backBtn.addEventListener('click', showInputArea);
+
+// ── Revisions drawer ────────────────────────────────────────────────────────
+// Lists a note's revision snapshots and shows a line diff between any two.
+// Every fetch here is a plain fetch (never api()) so the drawer also works on
+// the anonymous read-only page for a shared 'link' note.
+
+const revisionsDrawer = document.getElementById('revisions-drawer');
+const revisionsList = document.getElementById('revisions-list');
+const revFrom = document.getElementById('rev-from');
+const revTo = document.getElementById('rev-to');
+const revViewBtn = document.getElementById('rev-view-btn');
+const revDiff = document.getElementById('rev-diff');
+const revisionsCloseBtn = document.getElementById('revisions-close-btn');
+let revisions = [];
+const snapshotCache = new Map(); // `${id}:${n}` → text
+// True while the main article shows a revision snapshot instead of the note.
+let snapshotShown = false;
+
+function escapeHtml(s) {
+  return String(s).replace(
+    /[&<>"']/g,
+    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]
+  );
+}
+
+async function fetchSnapshot(id, n) {
+  const key = `${id}:${n}`;
+  if (snapshotCache.has(key)) return snapshotCache.get(key);
+  const res = await fetch(`/api/files/${encodeURIComponent(id)}/revisions/${n}`);
+  if (!res.ok) throw new Error('snapshot');
+  const text = await res.text();
+  snapshotCache.set(key, text);
+  return text;
+}
+
+function fmtWhen(iso) {
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+    ' ' +
+    d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  );
+}
+
+async function openRevisions() {
+  if (!currentNote) return;
+  const res = await fetch(`/api/files/${encodeURIComponent(currentNote.id)}/revisions`);
+  if (!res.ok) return;
+  revisions = await res.json();
+  revisionsList.innerHTML = '';
+  revFrom.innerHTML = '';
+  revTo.innerHTML = '';
+  if (revisions.length === 0) {
+    revisionsList.innerHTML = '<li>No edits yet.</li>';
+    revDiff.textContent = '';
+    revisionsDrawer.hidden = false;
+    return;
+  }
+  for (const r of revisions) {
+    const li = document.createElement('li');
+    li.dataset.n = String(r.n);
+    // `by` is only sent to the owner; non-owners get an empty cell.
+    li.innerHTML =
+      `<span>#${Number(r.n)}</span><span>${escapeHtml(fmtWhen(r.at))}</span>` +
+      `<span>${escapeHtml(r.by || '')}</span><span>${escapeHtml(r.message || '')}</span>` +
+      `<span>${Number(r.bytes)} B</span>`;
+    li.addEventListener('click', () => {
+      const idx = revisions.findIndex((x) => x.n === r.n);
+      const prev = revisions[idx + 1];
+      showDiff(prev ? prev.n : r.n, r.n);
+    });
+    revisionsList.appendChild(li);
+    for (const sel of [revFrom, revTo]) {
+      const opt = document.createElement('option');
+      opt.value = String(r.n);
+      opt.textContent = `#${r.n}`;
+      sel.appendChild(opt);
+    }
+  }
+  revisionsDrawer.hidden = false;
+  const latest = revisions[0].n;
+  const prev = revisions[1] ? revisions[1].n : latest;
+  showDiff(prev, latest);
+}
+
+function closeRevisions() {
+  revisionsDrawer.hidden = true;
+  // Closing the drawer while a snapshot is on screen restores the current note.
+  if (snapshotShown) {
+    snapshotShown = false;
+    if (currentNote && currentRawMarkdown != null) {
+      renderMarkdown(
+        currentRawMarkdown,
+        currentFilename,
+        currentNote.owned ? currentNote.id : null
+      );
+    }
+  }
+}
+
+async function showDiff(fromN, toN) {
+  revFrom.value = String(fromN);
+  revTo.value = String(toN);
+  for (const li of revisionsList.children)
+    li.classList.toggle('active', li.dataset.n === String(toN));
+  try {
+    const [a, b] = await Promise.all([
+      fetchSnapshot(currentNote.id, fromN),
+      fetchSnapshot(currentNote.id, toN),
+    ]);
+    revDiff.innerHTML = '';
+    if (fromN === toN) {
+      revDiff.textContent = '(same revision)';
+      return;
+    }
+    for (const part of window.Diff.diffLines(a, b)) {
+      const span = document.createElement('span');
+      span.className = part.added ? 'add' : part.removed ? 'del' : '';
+      span.textContent = part.value;
+      revDiff.appendChild(span);
+    }
+  } catch {
+    revDiff.textContent = 'Could not load revisions.';
+  }
+}
+
+historyBtn.addEventListener('click', () => {
+  if (revisionsDrawer.hidden) openRevisions();
+  else closeRevisions();
+});
+revisionsCloseBtn.addEventListener('click', closeRevisions);
+revFrom.addEventListener('change', () => showDiff(Number(revFrom.value), Number(revTo.value)));
+revTo.addEventListener('change', () => showDiff(Number(revFrom.value), Number(revTo.value)));
+revViewBtn.addEventListener('click', async () => {
+  // Render the "To" snapshot read-only in the main article. This never touches
+  // currentRawMarkdown, so Copy Markdown and Edit still use the saved note.
+  if (!currentNote) return;
+  const n = Number(revTo.value);
+  try {
+    const text = await fetchSnapshot(currentNote.id, n);
+    renderedOutput.innerHTML = md.render(text);
+    addCodeCopyButtons();
+    wrapTables();
+    viewerTitle.textContent = `${currentFilename} — revision #${n}`;
+    snapshotShown = true;
+  } catch {
+    revDiff.textContent = 'Could not load revisions.';
+  }
+});
 
 // ── Header scroll-away ──────────────────────────────────────────────────────
 // While reading a note the topbar scrolls out of view together with the
