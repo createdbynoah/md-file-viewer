@@ -354,6 +354,7 @@ async function checkAuth() {
 // Anonymous visitor on a /<id> link: render read-only if the note is shared.
 // Uses plain fetch, not api(), so a 401/404 never bounces through showLogin().
 async function tryLoadPublicFile(id) {
+  closeRevisions();
   const res = await fetch(`/api/files/${encodeURIComponent(id)}`);
   if (!res.ok) return false;
   const data = await res.json();
@@ -945,6 +946,7 @@ function getCurrentFileFolderId() {
 
 async function viewFile(id, { updateUrl = true } = {}) {
   if (editing) exitEditMode();
+  closeRevisions();
   try {
     const res = await api(`/api/files/${encodeURIComponent(id)}`);
     if (!res.ok) return;
@@ -1066,6 +1068,7 @@ function wrapTables() {
 
 function showInputArea({ updateUrl = true } = {}) {
   if (editing) exitEditMode();
+  closeRevisions();
   inputArea.hidden = false;
   viewerArea.hidden = true;
   viewerScroll.scrollTop = 0;
@@ -1139,6 +1142,9 @@ async function saveEdit() {
     const data = await res.json();
     currentRawMarkdown = content;
     currentNote.currentRev = data.currentRev;
+    // The saved edit adds a revision; drop cached snapshots and reset the drawer.
+    snapshotCache.clear();
+    closeRevisions();
     exitEditMode();
     syncSidebar('file-edit');
   } catch {
@@ -1175,6 +1181,141 @@ editorInput.addEventListener('keydown', (e) => {
 });
 
 backBtn.addEventListener('click', showInputArea);
+
+// ── Revisions drawer ────────────────────────────────────────────────────────
+// Lists a note's revision snapshots and shows a line diff between any two.
+// Every fetch here is a plain fetch (never api()) so the drawer also works on
+// the anonymous read-only page for a shared 'link' note.
+
+const revisionsDrawer = document.getElementById('revisions-drawer');
+const revisionsList = document.getElementById('revisions-list');
+const revFrom = document.getElementById('rev-from');
+const revTo = document.getElementById('rev-to');
+const revViewBtn = document.getElementById('rev-view-btn');
+const revDiff = document.getElementById('rev-diff');
+const revisionsCloseBtn = document.getElementById('revisions-close-btn');
+let revisions = [];
+const snapshotCache = new Map(); // `${id}:${n}` → text
+
+function escapeHtml(s) {
+  return String(s).replace(
+    /[&<>"']/g,
+    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]
+  );
+}
+
+async function fetchSnapshot(id, n) {
+  const key = `${id}:${n}`;
+  if (snapshotCache.has(key)) return snapshotCache.get(key);
+  const res = await fetch(`/api/files/${encodeURIComponent(id)}/revisions/${n}`);
+  if (!res.ok) throw new Error('snapshot');
+  const text = await res.text();
+  snapshotCache.set(key, text);
+  return text;
+}
+
+function fmtWhen(iso) {
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+    ' ' +
+    d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  );
+}
+
+async function openRevisions() {
+  if (!currentNote) return;
+  const res = await fetch(`/api/files/${encodeURIComponent(currentNote.id)}/revisions`);
+  if (!res.ok) return;
+  revisions = await res.json();
+  revisionsList.innerHTML = '';
+  revFrom.innerHTML = '';
+  revTo.innerHTML = '';
+  if (revisions.length === 0) {
+    revisionsList.innerHTML = '<li>No edits yet.</li>';
+    revDiff.textContent = '';
+    revisionsDrawer.hidden = false;
+    return;
+  }
+  for (const r of revisions) {
+    const li = document.createElement('li');
+    li.dataset.n = String(r.n);
+    // `by` is only sent to the owner; non-owners get an empty cell.
+    li.innerHTML =
+      `<span>#${r.n}</span><span>${escapeHtml(fmtWhen(r.at))}</span>` +
+      `<span>${escapeHtml(r.by || '')}</span><span>${escapeHtml(r.message || '')}</span>` +
+      `<span>${Number(r.bytes)} B</span>`;
+    li.addEventListener('click', () => {
+      const idx = revisions.findIndex((x) => x.n === r.n);
+      const prev = revisions[idx + 1];
+      showDiff(prev ? prev.n : r.n, r.n);
+    });
+    revisionsList.appendChild(li);
+    for (const sel of [revFrom, revTo]) {
+      const opt = document.createElement('option');
+      opt.value = String(r.n);
+      opt.textContent = `#${r.n}`;
+      sel.appendChild(opt);
+    }
+  }
+  revisionsDrawer.hidden = false;
+  const latest = revisions[0].n;
+  const prev = revisions[1] ? revisions[1].n : latest;
+  showDiff(prev, latest);
+}
+
+function closeRevisions() {
+  revisionsDrawer.hidden = true;
+}
+
+async function showDiff(fromN, toN) {
+  revFrom.value = String(fromN);
+  revTo.value = String(toN);
+  for (const li of revisionsList.children)
+    li.classList.toggle('active', li.dataset.n === String(toN));
+  try {
+    const [a, b] = await Promise.all([
+      fetchSnapshot(currentNote.id, fromN),
+      fetchSnapshot(currentNote.id, toN),
+    ]);
+    revDiff.innerHTML = '';
+    if (fromN === toN) {
+      revDiff.textContent = '(same revision)';
+      return;
+    }
+    for (const part of window.Diff.diffLines(a, b)) {
+      const span = document.createElement('span');
+      span.className = part.added ? 'add' : part.removed ? 'del' : '';
+      span.textContent = part.value;
+      revDiff.appendChild(span);
+    }
+  } catch {
+    revDiff.textContent = 'Could not load revisions.';
+  }
+}
+
+historyBtn.addEventListener('click', () => {
+  if (revisionsDrawer.hidden) openRevisions();
+  else closeRevisions();
+});
+revisionsCloseBtn.addEventListener('click', closeRevisions);
+revFrom.addEventListener('change', () => showDiff(Number(revFrom.value), Number(revTo.value)));
+revTo.addEventListener('change', () => showDiff(Number(revFrom.value), Number(revTo.value)));
+revViewBtn.addEventListener('click', async () => {
+  // Render the "To" snapshot read-only in the main article. This never touches
+  // currentRawMarkdown, so Copy Markdown and Edit still use the saved note.
+  if (!currentNote) return;
+  const n = Number(revTo.value);
+  try {
+    const text = await fetchSnapshot(currentNote.id, n);
+    renderedOutput.innerHTML = md.render(text);
+    addCodeCopyButtons();
+    wrapTables();
+    viewerTitle.textContent = `${currentFilename} — revision #${n}`;
+  } catch {
+    revDiff.textContent = 'Could not load revisions.';
+  }
+});
 
 // ── Header scroll-away ──────────────────────────────────────────────────────
 // While reading a note the topbar scrolls out of view together with the
