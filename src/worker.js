@@ -704,10 +704,13 @@ app.put('/api/files/:id', async (c) => {
 app.get('/api/files/:id/revisions', async (c) => {
   const id = c.req.param('id');
   const meta = await loadMeta(c.env.HISTORY, id);
-  if (!meta || !canRead(meta, c.get('user'))) {
+  const user = c.get('user');
+  if (!meta || !canRead(meta, user)) {
     return c.json({ error: 'File not found' }, 404);
   }
-  return c.json(await readRevisions(c.env.HISTORY, id));
+  const revisions = await readRevisions(c.env.HISTORY, id);
+  if (isOwner(meta, user)) return c.json(revisions);
+  return c.json(revisions.map(({ by: _by, ...rest }) => rest));
 });
 
 app.get('/api/files/:id/revisions/:n', async (c) => {

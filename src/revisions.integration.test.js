@@ -76,13 +76,18 @@ describe('revisions', () => {
     // private: owner yes, bob/anon 404
     const mine = await (await authed(`/api/files/${id}/revisions`, {}, env)).json();
     expect(mine.map((r) => r.n)).toEqual([2, 1, 0]);
+    expect(mine[0]).toHaveProperty('by', 'alice@dev.local');
     expect((await authed(`/api/files/${id}/revisions`, bob, env)).status).toBe(404);
     expect((await call(`/api/files/${id}/revisions`)).status).toBe(404);
     expect((await call(`/api/files/${id}/revisions/1`)).status).toBe(404);
 
     await share(env, id);
-    const anonList = await call(`/api/files/${id}/revisions`);
-    expect(anonList.status).toBe(200);
+    const anonListRes = await call(`/api/files/${id}/revisions`);
+    expect(anonListRes.status).toBe(200);
+    const anonList = await anonListRes.json();
+    expect(anonList[0]).not.toHaveProperty('by');
+    const bobList = await (await authed(`/api/files/${id}/revisions`, bob, env)).json();
+    expect(bobList[0]).not.toHaveProperty('by');
     const snap = await call(`/api/files/${id}/revisions/1`);
     expect(snap.status).toBe(200);
     expect(snap.headers.get('content-type')).toMatch(/text\/markdown/);
