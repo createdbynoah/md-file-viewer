@@ -204,17 +204,38 @@
             <div class="viewer-header">
               <div class="viewer-toolbar">
                 <button id="back-btn" class="text-btn">&larr; Back</button>
+                <!-- data-secondary buttons move into the ••• menu on narrow screens. -->
                 <div class="viewer-toolbar-right">
                   <div class="folder-dropdown-wrapper">
-                    <button id="folder-btn" class="text-btn" hidden>Move to Folder</button>
+                    <button id="folder-btn" class="text-btn" data-secondary hidden>
+                      Move to Folder
+                    </button>
                     <div id="folder-dropdown" class="folder-dropdown" hidden></div>
                   </div>
-                  <button id="copy-md-btn" class="text-btn" hidden>Copy Markdown</button>
+                  <button id="copy-md-btn" class="text-btn" data-secondary hidden>
+                    Copy Markdown
+                  </button>
                   <button id="edit-btn" class="text-btn" hidden>Edit</button>
-                  <button id="history-btn" class="text-btn" hidden>History</button>
+                  <button id="history-btn" class="text-btn" data-secondary hidden>History</button>
                   <button id="visibility-btn" class="text-btn" hidden></button>
-                  <button id="copy-link-btn" class="text-btn" hidden>Copy link</button>
-                  <button id="delete-file-btn" class="text-btn danger" hidden>Delete</button>
+                  <button id="copy-link-btn" class="text-btn" data-secondary hidden>
+                    Copy link
+                  </button>
+                  <button id="delete-file-btn" class="text-btn danger" data-secondary hidden>
+                    Delete
+                  </button>
+                  <div class="more-menu-wrapper">
+                    <button
+                      id="more-btn"
+                      class="text-btn"
+                      aria-label="More actions"
+                      aria-haspopup="menu"
+                      aria-expanded="false"
+                    >
+                      •••
+                    </button>
+                    <div id="more-menu" class="folder-dropdown" role="menu" hidden></div>
+                  </div>
                 </div>
               </div>
               <aside id="revisions-drawer" class="revisions-drawer" hidden>

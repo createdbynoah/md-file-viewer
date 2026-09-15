@@ -4,6 +4,7 @@ import {
   saveScrollRatio,
   loadScrollRatio,
 } from './scroll-memory.js';
+import { nextHeaderState } from './header-autohide.js';
 
 // ── Client logger ───────────────────────────────────────────────────────────
 
@@ -82,6 +83,9 @@ const copyLinkBtn = document.getElementById('copy-link-btn');
 const userEmail = document.getElementById('user-email');
 const editBtn = document.getElementById('edit-btn');
 const historyBtn = document.getElementById('history-btn');
+const moreBtn = document.getElementById('more-btn');
+const moreMenu = document.getElementById('more-menu');
+const viewerHeader = document.querySelector('.viewer-header');
 const editorArea = document.getElementById('editor-area');
 const editorInput = document.getElementById('editor-input');
 const editorMessage = document.getElementById('editor-message');
@@ -997,8 +1001,11 @@ function applyOwnerControls() {
   historyBtn.hidden = !currentNote;
   copyLinkBtn.hidden = !(currentNote && currentNote.visibility === 'link');
   if (owned) {
-    visibilityBtn.textContent =
-      currentNote.visibility === 'link' ? 'Shared: anyone with link' : 'Private';
+    // Long label on wide screens, short one in the mobile toolbar (CSS picks).
+    visibilityBtn.innerHTML =
+      currentNote.visibility === 'link'
+        ? '<span class="label-long">Shared: anyone with link</span><span class="label-short">Shared</span>'
+        : 'Private';
     visibilityBtn.title = 'Click to toggle sharing';
   }
 }
@@ -1018,11 +1025,7 @@ visibilityBtn.addEventListener('click', async () => {
 copyLinkBtn.addEventListener('click', () => {
   if (!currentNote) return;
   navigator.clipboard.writeText(location.origin + filePath(currentNote.id));
-  const orig = copyLinkBtn.textContent;
-  copyLinkBtn.textContent = 'Copied!';
-  setTimeout(() => {
-    copyLinkBtn.textContent = orig;
-  }, 1500);
+  flashCopied(copyLinkBtn);
 });
 
 function renderMarkdown(content, title, id) {
@@ -1391,14 +1394,118 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', saveScrollNow);
 
+// ── Toolbar auto-hide ───────────────────────────────────────────────────────
+// The sticky note header slides away while reading down and returns on a
+// scroll up (see header-autohide.js). It stays put while anything in it is in
+// use, so an open menu or drawer never vanishes from under the reader.
+
+let headerState = { hidden: false, anchorY: 0 };
+let headerFrame = 0;
+
+function headerLocked() {
+  return (
+    editing ||
+    !revisionsDrawer.hidden ||
+    !moreMenu.hidden ||
+    !folderDropdown.hidden ||
+    viewerHeader.querySelector(':focus-visible') !== null
+  );
+}
+
+function showHeader() {
+  headerState = { hidden: false, anchorY: window.scrollY };
+  viewerHeader.classList.remove('is-hidden');
+}
+
+function updateHeader() {
+  headerFrame = 0;
+  if (viewerArea.hidden) {
+    showHeader();
+    return;
+  }
+  const se = document.scrollingElement;
+  // Clamp so iOS rubber-banding past the bottom never reads as a scroll up.
+  const y = Math.min(window.scrollY, se.scrollHeight - se.clientHeight);
+  const stuckAt =
+    viewerArea.getBoundingClientRect().top + window.scrollY + viewerHeader.offsetHeight;
+  headerState = nextHeaderState(headerState, y, { stuckAt, locked: headerLocked() });
+  viewerHeader.classList.toggle('is-hidden', headerState.hidden);
+}
+
+window.addEventListener(
+  'scroll',
+  () => {
+    if (!headerFrame) headerFrame = requestAnimationFrame(updateHeader);
+  },
+  { passive: true }
+);
+// Tabbing into a hidden header brings it back.
+viewerHeader.addEventListener('focusin', showHeader);
+
+// ── Mobile ••• menu ─────────────────────────────────────────────────────────
+// Below 768px CSS hides the toolbar buttons marked data-secondary; this menu
+// lists whichever of them currently apply and forwards each tap to the real
+// button, so every action keeps a single handler.
+
+function closeMoreMenu() {
+  moreMenu.hidden = true;
+  moreBtn.setAttribute('aria-expanded', 'false');
+}
+
+moreBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!moreMenu.hidden) {
+    closeMoreMenu();
+    return;
+  }
+  folderDropdown.hidden = true;
+  moreMenu.textContent = '';
+  for (const btn of viewerHeader.querySelectorAll('[data-secondary]')) {
+    if (btn.hidden) continue;
+    if (btn === deleteFileBtn && moreMenu.childElementCount) {
+      const sep = document.createElement('div');
+      sep.className = 'folder-dropdown-sep';
+      moreMenu.appendChild(sep);
+    }
+    const item = document.createElement('button');
+    item.className = 'folder-dropdown-item';
+    item.classList.toggle('danger', btn.classList.contains('danger'));
+    item.setAttribute('role', 'menuitem');
+    item.textContent = btn.textContent.trim();
+    item.addEventListener('click', (ev) => {
+      // Otherwise the document listener closes a dropdown the button just opened.
+      ev.stopPropagation();
+      closeMoreMenu();
+      btn.click();
+    });
+    moreMenu.appendChild(item);
+  }
+  moreMenu.hidden = false;
+  moreBtn.setAttribute('aria-expanded', 'true');
+});
+
+document.addEventListener('click', closeMoreMenu);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !moreMenu.hidden) {
+    closeMoreMenu();
+    moreBtn.focus();
+  }
+});
+
+// "Copied!" on the button itself, or on ••• when the button lives in the menu.
+function flashCopied(btn) {
+  const target = btn.offsetParent === null ? moreBtn : btn;
+  const orig = target.textContent;
+  target.textContent = 'Copied!';
+  setTimeout(() => {
+    target.textContent = orig;
+  }, 1500);
+}
+
 copyMdBtn.addEventListener('click', () => {
   if (!currentRawMarkdown) return;
   navigator.clipboard.writeText(currentRawMarkdown);
-  const orig = copyMdBtn.textContent;
-  copyMdBtn.textContent = 'Copied!';
-  setTimeout(() => {
-    copyMdBtn.textContent = orig;
-  }, 1500);
+  flashCopied(copyMdBtn);
 });
 
 deleteFileBtn.addEventListener('click', async () => {

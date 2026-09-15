@@ -840,12 +840,34 @@ body {
   display: none;
 }
 
-/* Toolbar + History drawer stay pinned while the note scrolls underneath. */
+/* Toolbar + History drawer stay pinned while the note scrolls underneath,
+   sliding away on scroll down and back on scroll up (see header-autohide.js). */
 .viewer-header {
   position: sticky;
   top: 0;
   z-index: 10;
   background: var(--bg);
+  transition: transform 0.2s ease;
+}
+
+.viewer-header.is-hidden {
+  transform: translateY(-100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-header {
+    transition: none;
+  }
+}
+
+/* The ••• menu only exists on narrow screens (see the mobile media query). */
+.more-menu-wrapper {
+  display: none;
+}
+
+/* Buttons with a long and short label show the short one on narrow screens. */
+.label-short {
+  display: none;
 }
 
 .viewer-toolbar {
@@ -1122,6 +1144,46 @@ body {
 
   .viewer-toolbar {
     padding: 8px 16px;
+    /* Anchors the folder and ••• dropdowns, whose own buttons may be hidden. */
+    position: relative;
+  }
+
+  .viewer-toolbar-right {
+    gap: 4px;
+  }
+
+  .viewer-toolbar .text-btn {
+    white-space: nowrap;
+  }
+
+  /* Secondary actions are offered from the ••• menu instead. */
+  .viewer-toolbar [data-secondary] {
+    display: none;
+  }
+
+  .more-menu-wrapper {
+    display: block;
+  }
+
+  .folder-dropdown-wrapper,
+  .more-menu-wrapper {
+    position: static;
+  }
+
+  .viewer-toolbar .folder-dropdown {
+    right: 8px;
+  }
+
+  .folder-dropdown-item.danger {
+    color: var(--danger);
+  }
+
+  .label-long {
+    display: none;
+  }
+
+  .label-short {
+    display: inline;
   }
 
   .markdown-body {
