@@ -846,8 +846,19 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: var(--bg);
   transition: transform 0.2s ease;
+}
+
+/* The background lives on a pseudo-element, not the sticky box itself: iOS 26
+   Safari tints its status bar from the background-color of a sticky/fixed
+   element at the top edge, even after it has slid away, which blocks content
+   from scrolling under the status bar. Pseudo-elements are not sampled. */
+.viewer-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--bg);
 }
 
 .viewer-header.is-hidden {
