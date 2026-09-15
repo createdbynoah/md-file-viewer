@@ -88,7 +88,7 @@ Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 ## Key Patterns
 
 - Client-side markdown rendering using CDN-loaded markdown-it and highlight.js (not bundled)
-- The document is the only vertical scroller (no `overflow: auto` app shell). iOS Safari collapses its toolbars only for document scrolling; the sidebar is `position: sticky` on desktop, `fixed` on mobile. Per-note scroll position is remembered as a ratio in `localStorage` (`scrollPos:{uuid}`, cap 50) by `public/js/scroll-memory.js` and restored in `viewFile`; `history.scrollRestoration` is `manual`
+- The document is the only vertical scroller (no `overflow: auto` app shell). iOS Safari collapses its toolbars only for document scrolling; the sidebar is `position: sticky` on desktop (tucked under the topbar by a negative `margin-top` + matching `padding-top` so the page is never taller than the viewport), `fixed` on mobile; the note toolbar + History drawer (`.viewer-header`) are sticky so they stay reachable mid-note. Per-note scroll position is remembered as a ratio in `localStorage` (`scrollPos:{uuid}`, cap 50) by `public/js/scroll-memory.js` and restored in `viewFile`; `history.scrollRestoration` is `manual`
 - Theme switching via `data-theme` attribute on `<html>` with CSS custom properties
 - Sidebar uses CSS `margin-left` transition on desktop, `transform: translateX` on mobile (<768px)
 - History is capped at 100 entries per user, stored as a single KV value at `history:{sub}`

@@ -201,38 +201,40 @@
 
           <!-- Rendered output -->
           <div id="viewer-area" class="viewer-area" hidden>
-            <div class="viewer-toolbar">
-              <button id="back-btn" class="text-btn">&larr; Back</button>
-              <div class="viewer-toolbar-right">
-                <div class="folder-dropdown-wrapper">
-                  <button id="folder-btn" class="text-btn" hidden>Move to Folder</button>
-                  <div id="folder-dropdown" class="folder-dropdown" hidden></div>
+            <div class="viewer-header">
+              <div class="viewer-toolbar">
+                <button id="back-btn" class="text-btn">&larr; Back</button>
+                <div class="viewer-toolbar-right">
+                  <div class="folder-dropdown-wrapper">
+                    <button id="folder-btn" class="text-btn" hidden>Move to Folder</button>
+                    <div id="folder-dropdown" class="folder-dropdown" hidden></div>
+                  </div>
+                  <button id="copy-md-btn" class="text-btn" hidden>Copy Markdown</button>
+                  <button id="edit-btn" class="text-btn" hidden>Edit</button>
+                  <button id="history-btn" class="text-btn" hidden>History</button>
+                  <button id="visibility-btn" class="text-btn" hidden></button>
+                  <button id="copy-link-btn" class="text-btn" hidden>Copy link</button>
+                  <button id="delete-file-btn" class="text-btn danger" hidden>Delete</button>
                 </div>
-                <button id="copy-md-btn" class="text-btn" hidden>Copy Markdown</button>
-                <button id="edit-btn" class="text-btn" hidden>Edit</button>
-                <button id="history-btn" class="text-btn" hidden>History</button>
-                <button id="visibility-btn" class="text-btn" hidden></button>
-                <button id="copy-link-btn" class="text-btn" hidden>Copy link</button>
-                <button id="delete-file-btn" class="text-btn danger" hidden>Delete</button>
               </div>
+              <aside id="revisions-drawer" class="revisions-drawer" hidden>
+                <div class="revisions-header">
+                  <strong>History</strong>
+                  <label
+                    >From
+                    <select id="rev-from"></select
+                  ></label>
+                  <label
+                    >To
+                    <select id="rev-to"></select
+                  ></label>
+                  <button id="rev-view-btn" class="text-btn">View "To"</button>
+                  <button id="revisions-close-btn" class="text-btn">Close</button>
+                </div>
+                <ul id="revisions-list" class="revisions-list"></ul>
+                <pre id="rev-diff" class="rev-diff"></pre>
+              </aside>
             </div>
-            <aside id="revisions-drawer" class="revisions-drawer" hidden>
-              <div class="revisions-header">
-                <strong>History</strong>
-                <label
-                  >From
-                  <select id="rev-from"></select
-                ></label>
-                <label
-                  >To
-                  <select id="rev-to"></select
-                ></label>
-                <button id="rev-view-btn" class="text-btn">View "To"</button>
-                <button id="revisions-close-btn" class="text-btn">Close</button>
-              </div>
-              <ul id="revisions-list" class="revisions-list"></ul>
-              <pre id="rev-diff" class="rev-diff"></pre>
-            </aside>
             <div class="viewer-scroll">
               <div id="viewer-created" class="viewer-created" hidden></div>
               <div id="editor-area" class="editor-area" hidden>
