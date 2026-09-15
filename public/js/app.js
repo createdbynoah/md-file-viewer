@@ -1,3 +1,10 @@
+import {
+  scrollRatio,
+  ratioToScrollTop,
+  saveScrollRatio,
+  loadScrollRatio,
+} from './scroll-memory.js';
+
 // ── Client logger ───────────────────────────────────────────────────────────
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -73,8 +80,6 @@ const topbarSignin = document.getElementById('topbar-signin');
 const visibilityBtn = document.getElementById('visibility-btn');
 const copyLinkBtn = document.getElementById('copy-link-btn');
 const userEmail = document.getElementById('user-email');
-const topbar = document.querySelector('.topbar');
-const viewerScroll = document.querySelector('.viewer-scroll');
 const editBtn = document.getElementById('edit-btn');
 const historyBtn = document.getElementById('history-btn');
 const editorArea = document.getElementById('editor-area');
@@ -954,6 +959,7 @@ async function viewFile(id, { updateUrl = true } = {}) {
     currentRawMarkdown = data.content;
     renderMarkdown(data.content, data.filename, data.owned ? id : null);
     currentFileId = id;
+    restoreScroll(id);
     currentNote = {
       id,
       owned: Boolean(data.owned),
@@ -1023,8 +1029,7 @@ function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
   addCodeCopyButtons();
   wrapTables();
-  viewerScroll.scrollTop = 0;
-  updateTopbarOffset();
+  window.scrollTo(0, 0);
   viewerTitle.textContent = title || 'Markdown Viewer';
   currentFilename = title || 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', id ? 'true' : 'false');
@@ -1071,8 +1076,7 @@ function showInputArea({ updateUrl = true } = {}) {
   closeRevisions();
   inputArea.hidden = false;
   viewerArea.hidden = true;
-  viewerScroll.scrollTop = 0;
-  updateTopbarOffset();
+  window.scrollTo(0, 0);
   viewerTitle.textContent = 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', 'false');
   currentFileId = null;
@@ -1119,6 +1123,7 @@ function exitEditMode() {
   renderedOutput.hidden = false;
   if (currentNote && currentRawMarkdown != null) {
     renderMarkdown(currentRawMarkdown, currentFilename, currentNote.owned ? currentNote.id : null);
+    restoreScroll(currentNote.id);
   }
   applyOwnerControls();
 }
@@ -1284,6 +1289,7 @@ function closeRevisions() {
         currentFilename,
         currentNote.owned ? currentNote.id : null
       );
+      restoreScroll(currentNote.id);
     }
   }
 }
@@ -1338,22 +1344,52 @@ revViewBtn.addEventListener('click', async () => {
   }
 });
 
-// ── Header scroll-away ──────────────────────────────────────────────────────
-// While reading a note the topbar scrolls out of view together with the
-// content: the offset tracks the viewer's scrollTop, capped at the topbar
-// height, and returns to zero as the user scrolls back to the top.
+// ── Scroll memory ───────────────────────────────────────────────────────────
+// The document is the scroller. Each note remembers how far down it was read
+// (as a ratio, see scroll-memory.js) so a reload or a return from another app
+// on mobile lands where the reader left off. Positions are saved while
+// reading only — never from the editor or a revision snapshot.
 
-let topbarOffset = 0;
+// Native restoration would fire before the note has loaded; we restore ourselves.
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
-function updateTopbarOffset() {
-  const maxOffset = topbar.offsetHeight;
-  const offset = viewerArea.hidden ? 0 : Math.min(viewerScroll.scrollTop, maxOffset);
-  if (offset === topbarOffset) return;
-  topbarOffset = offset;
-  appScreen.style.setProperty('--topbar-offset', offset + 'px');
+const SCROLL_SAVE_DEBOUNCE_MS = 200;
+let scrollSaveTimer = null;
+
+function readingNoteId() {
+  return currentFileId && !editing && !snapshotShown && !viewerArea.hidden ? currentFileId : null;
 }
 
-viewerScroll.addEventListener('scroll', updateTopbarOffset, { passive: true });
+function saveScrollNow() {
+  const id = readingNoteId();
+  if (!id) return;
+  saveScrollRatio(localStorage, id, scrollRatio(document.scrollingElement));
+}
+
+function restoreScroll(id) {
+  const ratio = loadScrollRatio(localStorage, id);
+  if (ratio == null) return;
+  // Wait a frame so the rendered note has its final height.
+  requestAnimationFrame(() => {
+    if (currentFileId !== id) return;
+    window.scrollTo(0, ratioToScrollTop(ratio, document.scrollingElement));
+  });
+}
+
+window.addEventListener(
+  'scroll',
+  () => {
+    if (!readingNoteId()) return;
+    clearTimeout(scrollSaveTimer);
+    scrollSaveTimer = setTimeout(saveScrollNow, SCROLL_SAVE_DEBOUNCE_MS);
+  },
+  { passive: true }
+);
+// Switching apps on mobile or closing the tab: flush without waiting.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) saveScrollNow();
+});
+window.addEventListener('pagehide', saveScrollNow);
 
 copyMdBtn.addEventListener('click', () => {
   if (!currentRawMarkdown) return;

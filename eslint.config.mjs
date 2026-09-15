@@ -26,7 +26,7 @@ export default [
     files: ['public/js/**/*.js'],
     languageOptions: {
       ecmaVersion: 2024,
-      sourceType: 'script',
+      sourceType: 'module',
       globals: { ...globals.browser, hljs: 'readonly', markdownit: 'readonly' },
     },
   },

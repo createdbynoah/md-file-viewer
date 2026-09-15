@@ -29,7 +29,8 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 **Frontend:** Vanilla JS SPA in `public/` — no build step, no bundler. Static assets served via Workers Static Assets from the `public/` directory.
 
 - `public/index.html` — full HTML structure (login screen + app screen, toggled via `hidden` attribute)
-- `public/js/app.js` — all client logic (auth, file upload, paste, history, markdown rendering)
+- `public/js/app.js` — all client logic (auth, file upload, paste, history, markdown rendering); loaded as an ES module
+- `public/js/scroll-memory.js` — pure per-note scroll-position helpers (unit-tested)
 - `public/css/style.css` — CSS custom properties for light/dark theming
 
 **Storage bindings** (configured in `wrangler.jsonc`):
@@ -87,6 +88,7 @@ Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 ## Key Patterns
 
 - Client-side markdown rendering using CDN-loaded markdown-it and highlight.js (not bundled)
+- The document is the only vertical scroller (no `overflow: auto` app shell). iOS Safari collapses its toolbars only for document scrolling; the sidebar is `position: sticky` on desktop, `fixed` on mobile. Per-note scroll position is remembered as a ratio in `localStorage` (`scrollPos:{uuid}`, cap 50) by `public/js/scroll-memory.js` and restored in `viewFile`; `history.scrollRestoration` is `manual`
 - Theme switching via `data-theme` attribute on `<html>` with CSS custom properties
 - Sidebar uses CSS `margin-left` transition on desktop, `transform: translateX` on mobile (<768px)
 - History is capped at 100 entries per user, stored as a single KV value at `history:{sub}`
