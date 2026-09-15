@@ -7,7 +7,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          include: ['src/**/*.test.js'],
+          include: ['src/**/*.test.js', 'public/js/**/*.test.js'],
           exclude: ['src/**/*.integration.test.js'],
           environment: 'node',
         },
