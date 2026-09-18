@@ -786,7 +786,7 @@ function cleanAnchor(a) {
       kind: cleanText(a.block.kind).slice(0, 40),
       label: cleanText(a.block.label).slice(0, 200),
     };
-  } else if (!anchor.quote) {
+  } else if (!anchor.quote.trim()) {
     return null;
   }
   return anchor;

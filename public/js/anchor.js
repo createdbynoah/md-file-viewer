@@ -28,6 +28,14 @@ function lineStarts(source) {
   return starts;
 }
 
+// locate() runs once per comment against the same source on every repaint and
+// every export; build the line table once per source string, not once per call.
+let startsMemo = { source: null, starts: null };
+function lineStartsFor(source) {
+  if (startsMemo.source !== source) startsMemo = { source, starts: lineStarts(source) };
+  return startsMemo.starts;
+}
+
 /** 1-based line containing `offset`, via binary search over `lineStarts`. */
 function lineOf(starts, offset) {
   let lo = 0;
@@ -146,7 +154,7 @@ function contextScore(source, start, end, anchor) {
  * @param {Anchor} anchor
  */
 export function locate(source, anchor) {
-  const starts = lineStarts(source);
+  const starts = lineStartsFor(source);
   if (anchor.block || anchor.approx) {
     const [s, e] = anchor.lines;
     if (s < 1 || e < s || e > starts.length) return null;

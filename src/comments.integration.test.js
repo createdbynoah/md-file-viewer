@@ -76,6 +76,11 @@ describe('comments', () => {
     expect((await post(id, { tag: 'general', note: 'Again' })).status).toBe(400); // one per note
   });
 
+  it('rejects a whitespace-only quote', async () => {
+    const res = await post(id, { tag: 'cut', anchor: quoteAnchor('   ', 3) });
+    expect(res.status).toBe(400);
+  });
+
   it('patches note, tag and status; never reuses ids after delete', async () => {
     await post(id, { tag: 'fix', note: 'a', anchor: quoteAnchor('soon', 3) });
     const patched = await authed(

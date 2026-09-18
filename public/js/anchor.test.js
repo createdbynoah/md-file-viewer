@@ -163,3 +163,24 @@ describe('wsRegex', () => {
     expect('an em — dash'.match(wsRegex('em --- dash'))[0]).toBe('em — dash');
   });
 });
+
+describe('locate performance', () => {
+  it('does not rescan a large source for every anchor', () => {
+    const big = Array.from(
+      { length: 40000 },
+      (_, i) => `line ${i} of a fairly long document body`
+    ).join('\n'); // ~1.7 MB
+    const anchors = Array.from({ length: 500 }, (_, i) =>
+      blockAnchor([i + 1, i + 2], 'paragraph', `paragraph ${i}`)
+    );
+    const t0 = performance.now();
+    for (const a of anchors) expect(locate(big, a)).not.toBeNull();
+    expect(performance.now() - t0).toBeLessThan(400);
+  });
+  it('still sees a changed source (memo is per source string)', () => {
+    const a = captureAnchor('one\ntwo\nthree', [2, 2], 'two');
+    expect(locate('one\ntwo\nthree', a).lines).toEqual([2, 2]);
+    expect(locate('zero\none\ntwo\nthree', a).lines).toEqual([3, 3]);
+    expect(locate('one\nthree', blockAnchor([3, 3], 'paragraph', 'x'))).toBeNull();
+  });
+});
