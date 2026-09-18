@@ -32,12 +32,16 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 - `public/js/app.js` — all client logic (auth, file upload, paste, history, markdown rendering); loaded as an ES module
 - `public/js/scroll-memory.js` — pure per-note scroll-position helpers (unit-tested)
 - `public/js/header-autohide.js` — pure show/hide decision for the sticky note toolbar (unit-tested)
+- `public/js/anchor.js` — pure source-quote anchoring (capture/locate); also imported by the worker (unit-tested)
+- `public/js/feedback-format.js` — pure agent-feedback text generator (unit-tested)
+- `public/js/source-lines.js` — markdown-it plugin stamping `data-line` on blocks (unit-tested)
+- `public/js/comments-ui.js` — review mode DOM: selection popover, highlights, rail, Copy feedback
 - `public/css/style.css` — CSS custom properties for light/dark theming
 
 **Storage bindings** (configured in `wrangler.jsonc`):
 
 - `MD_FILES` — R2 bucket, stores raw markdown as `{uuid}.md` (current) plus `{uuid}/r/{n}.md` revision snapshots
-- `HISTORY` — KV namespace: `meta:{uuid}` (per-file metadata incl. `ownerId`, `visibility: 'private'|'link'`, `editors`, `currentRev`), `rev:{uuid}` (revision log, newest first, cap 100), `user:{sub}` (account), `user:{sub}:notes` (owner's note ids, newest first), `history:{sub}` (view history, max 100), `folders:{sub}`
+- `HISTORY` — KV namespace: `meta:{uuid}` (per-file metadata incl. `ownerId`, `visibility: 'private'|'link'`, `editors`, `currentRev`), `rev:{uuid}` (revision log, newest first, cap 100), `user:{sub}` (account), `user:{sub}:notes` (owner's note ids, newest first), `history:{sub}` (view history, max 100), `folders:{sub}`, `comments:{uuid}` (owner's review comments `{ nextId, round, items }`, cap 500)
 
 **Auth:** Cloudflare Access (Zero Trust) gates only `/api/auth/login`. Every `/api/*` request runs `resolveUser()` which verifies the `CF_Authorization` cookie (or `Cf-Access-Jwt-Assertion` header) via `src/auth.js` against `ACCESS_AUD` / `ACCESS_TEAM_DOMAIN` (wrangler vars, not secrets) and sets `c.get('user')` to `{ id, email }` or `null`. Routes outside `/api/auth/*` 401 without a user. Design: `docs/plans/2026-09-04-auth-design.md`.
 
@@ -47,26 +51,30 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 
 All routes are prefixed with `/api/`. Auth-protected unless noted:
 
-| Method | Path                          | Purpose                                                       |
-| ------ | ----------------------------- | ------------------------------------------------------------- |
-| GET    | `/api/auth/login`             | Access-gated; upserts user, redirects (unprotected)           |
-| GET    | `/api/auth/check`             | `{ authenticated, user }` (unprotected)                       |
-| POST   | `/api/auth/logout`            | Clears cookie, returns Access logout URL (unprotected)        |
-| POST   | `/api/upload`                 | Upload `.md` file (multipart form)                            |
-| POST   | `/api/paste`                  | Save pasted markdown (JSON body)                              |
-| GET    | `/api/files`                  | List all files                                                |
-| GET    | `/api/files/:id`              | Get file content; anonymous OK for 'link' notes (unprotected) |
-| PATCH  | `/api/files/:id`              | Rename file                                                   |
-| PATCH  | `/api/files/:id/visibility`   | Set 'private' or 'link' (owner only)                          |
-| DELETE | `/api/files/:id`              | Delete file                                                   |
-| PUT    | `/api/files/:id`              | Edit content; creates a revision (owner only)                 |
-| GET    | `/api/files/:id/revisions`    | Revision log, newest first (same read rules; unprotected)     |
-| GET    | `/api/files/:id/revisions/:n` | Raw markdown snapshot (same read rules; unprotected)          |
-| GET    | `/api/history`                | Get view history                                              |
-| DELETE | `/api/history`                | Clear all history                                             |
-| DELETE | `/api/history/:id`            | Remove single history entry                                   |
-| POST   | `/api/dev/seed`               | UAT only: reset + seed scenarios                              |
-| POST   | `/api/dev/retention`          | UAT only: run retention cron now                              |
+| Method | Path                           | Purpose                                                       |
+| ------ | ------------------------------ | ------------------------------------------------------------- |
+| GET    | `/api/auth/login`              | Access-gated; upserts user, redirects (unprotected)           |
+| GET    | `/api/auth/check`              | `{ authenticated, user }` (unprotected)                       |
+| POST   | `/api/auth/logout`             | Clears cookie, returns Access logout URL (unprotected)        |
+| POST   | `/api/upload`                  | Upload `.md` file (multipart form)                            |
+| POST   | `/api/paste`                   | Save pasted markdown (JSON body)                              |
+| GET    | `/api/files`                   | List all files                                                |
+| GET    | `/api/files/:id`               | Get file content; anonymous OK for 'link' notes (unprotected) |
+| PATCH  | `/api/files/:id`               | Rename file                                                   |
+| PATCH  | `/api/files/:id/visibility`    | Set 'private' or 'link' (owner only)                          |
+| DELETE | `/api/files/:id`               | Delete file                                                   |
+| PUT    | `/api/files/:id`               | Edit content; creates a revision (owner only)                 |
+| GET    | `/api/files/:id/revisions`     | Revision log, newest first (same read rules; unprotected)     |
+| GET    | `/api/files/:id/revisions/:n`  | Raw markdown snapshot (same read rules; unprotected)          |
+| GET    | `/api/history`                 | Get view history                                              |
+| DELETE | `/api/history`                 | Clear all history                                             |
+| DELETE | `/api/history/:id`             | Remove single history entry                                   |
+| GET    | `/api/files/:id/comments`      | List review comments (owner only)                             |
+| POST   | `/api/files/:id/comments`      | Add comment; 409 if anchor not in current source              |
+| PATCH  | `/api/files/:id/comments/:cid` | Edit note/tag/status                                          |
+| DELETE | `/api/files/:id/comments/:cid` | Delete comment                                                |
+| POST   | `/api/dev/seed`                | UAT only: reset + seed scenarios                              |
+| POST   | `/api/dev/retention`           | UAT only: run retention cron now                              |
 
 ## CI/CD
 
@@ -77,6 +85,8 @@ GitHub Actions (`.github/workflows/ci.yml`): `ci` job (lint, format:check, typec
 `vitest.config.js` has two projects: `unit` (node, `src/**/*.test.js`) and `integration` (`@cloudflare/vitest-pool-workers`, `src/**/*.integration.test.js`, miniflare R2 `MD_FILES` + KV `HISTORY`, isolated storage off — every test calls `clearAll()` in `beforeEach`). Tests drive the Hono app directly via `worker.fetch(req, env, ctx)` with a stubbed `ASSETS` fetcher (`src/test-utils/app.js`), so they control the full env. Vitest is pinned to 3.x for pool-workers compat. `src/ownership.integration.test.js` covers per-user visibility/ownership rules and `src/migrate.integration.test.js` covers `migrateToOwner`; both use two-user scenarios via `asUser()`.
 
 `src/revisions.integration.test.js` covers the edit/revision-log/snapshot flow.
+
+`src/comments.integration.test.js` covers comment CRUD, ownership 404s, anchor validation, and cleanup on delete.
 
 Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 
@@ -101,3 +111,4 @@ Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 - Ownership: every write route checks `meta.ownerId === user.id` and answers 404 (never 403). `canRead()`: `link` → anyone, `private` → owner, legacy meta without `ownerId` → any authenticated user until `pnpm migrate:owner` has run.
 - Listing a user's notes reads `user:{sub}:notes` then `getMetaMany`; never a `meta:` prefix scan (eventually consistent). Only the retention cron scans.
 - Revisions: `PUT` snapshots rev 0 lazily on first edit; cap 100 with oldest snapshot deleted; `deleteNoteObjects()` is the only way a note's objects are removed. Diffs are client-side (`jsdiff` CDN). Note size cap 2 MB.
+- Review comments anchor to the raw markdown (exact quote + 32-char context + 1-based line range), never to the DOM; `data-line` on rendered blocks maps selections back to source — on an indented code block it lands on the `<pre>`, not the fenced `<code>`, and a list's range may include its trailing blank line. Highlights use the CSS Custom Highlight API so the rendered DOM is never mutated. The tag-picker shortcut is **Option/Alt+1–4** (matched on `e.code`, not the digit itself) so bare digit keys still type into the note. Review mode is desktop-only (≥1024px) until phase A2, and is unavailable (button hidden, and on the ••• menu below 1024px Copy feedback is absent too) while an old revision snapshot is shown. Design: `docs/plans/2026-09-18-markup-comments-design.md`.

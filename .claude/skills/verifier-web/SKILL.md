@@ -48,6 +48,7 @@ Fixed UUIDs (`src/seed.js` → `SEED_IDS`) so deep links are stable across re-se
 | **Expiring note**                           | 59d idle: survives one retention run, deleted on the next                                                   |
 | **Other private** (owner `other_user`)      | Private note owned by another user: 404 for the stub user                                                   |
 | **Other shared** (owner `other_user`, link) | Link-visibility note: readable by the stub user via direct link                                             |
+| **Review me**                               | Note with seeded review comments (exact fix, keep, block question, general)                                 |
 
 History is seeded across Today / Yesterday / This Week / Older buckets.
 

@@ -28,7 +28,7 @@ A toolbar toggle, owner only, off by default. Off: the note reads clean — no h
 
 ### Creating a comment
 
-- **Desktop:** select text → a popover appears at the selection with the input focused. `1`–`4` pick the tag, `⌘↵` saves, `esc` cancels. `cut` and `keep` save with an empty note.
+- **Desktop:** select text → a popover appears at the selection with the input focused. `⌥1`–`⌥4` pick the tag (bare digits type into the note), `⌘↵` saves, `esc` cancels. `cut` and `keep` save with an empty note.
 - **Mobile:** native long-press selection; the iOS callout is left alone. While a selection exists, a floating "Comment" pill shows bottom-right. Tapping it opens a bottom sheet: quoted text, tag chips, input, Save. The sheet tracks `visualViewport` so it sits above the keyboard. No `background` on the sheet's top edge element (iOS 26 status-bar tint rule; use `::before`).
 - **Block comment:** desktop shows a gutter `+` on block hover; on mobile, tapping a block with no selection offers "Comment on block". Used for code blocks, tables, images, headings, whole paragraphs. Selections inside a code block anchor at line granularity.
 - **General note:** one unanchored entry per note, created from the rail / list sheet.

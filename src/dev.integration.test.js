@@ -36,9 +36,9 @@ describe('dev gate', () => {
     });
     const seed = await call('/api/dev/seed', { method: 'POST' }, env);
     expect(seed.status).toBe(200);
-    expect(await seed.json()).toMatchObject({ ok: true, notes: 11, folders: 3, revisions: 2 });
+    expect(await seed.json()).toMatchObject({ ok: true, notes: 12, folders: 3, revisions: 2 });
     const files = await (await call('/api/files', {}, env)).json();
-    expect(files).toHaveLength(7); // own, non-archived
+    expect(files).toHaveLength(8); // own, non-archived
     const folders = await (await call('/api/folders', {}, env)).json();
     expect(folders.map((f) => f.files.length)).toEqual([2, 1, 0]);
     // second owner: link note readable by the stub user, private one is not
@@ -59,10 +59,10 @@ describe('dev gate', () => {
     const env = uat();
     await call('/api/dev/seed', { method: 'POST' }, env);
     await call('/api/dev/seed', { method: 'POST' }, env);
-    expect(await (await call('/api/files', {}, env)).json()).toHaveLength(7);
+    expect(await (await call('/api/files', {}, env)).json()).toHaveLength(8);
     expect((await call('/api/dev/retention', { method: 'POST' }, env)).status).toBe(200);
-    // expiring note (59d idle) survives one run; still 7 visible
-    expect(await (await call('/api/files', {}, env)).json()).toHaveLength(7);
+    // expiring note (59d idle) survives one run; still 8 visible
+    expect(await (await call('/api/files', {}, env)).json()).toHaveLength(8);
   });
 
   it('X-Dev-User switches identity under the stub', async () => {

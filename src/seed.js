@@ -17,6 +17,7 @@ export const SEED_IDS = {
   expiring: '99999999-9999-4999-8999-999999999999',
   otherPrivate: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   otherLink: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  review: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
 };
 
 const OWNER = 'user_local_dev';
@@ -106,6 +107,69 @@ function note(
   return { id, content, meta };
 }
 
+const REVIEW = [
+  '# Rollout plan', // 1
+  '', // 2
+  'We will ship to all customers in a single release after the beta ends.', // 3
+  'Rollback is a **one-line** flag flip.', // 4
+  '', // 5
+  '## Costs', // 6
+  '', // 7
+  '| Item | Monthly |', // 8
+  '| --- | --- |', // 9
+  '| Workers | $5 |', // 10
+  '| R2 | $2 |', // 11
+  '', // 12
+  'The beta is small. The beta is closed.', // 13
+  '',
+].join('\n');
+
+const REVIEW_COMMENTS = {
+  nextId: 5,
+  round: 1,
+  items: [
+    {
+      id: 'c1',
+      tag: 'fix',
+      note: 'Stage it: 5% → 25% → 100%',
+      anchor: {
+        quote: 'all customers in a single release',
+        approx: false,
+        prefix: 'We will ship to ',
+        suffix: ' after the beta ends.',
+        lines: [3, 3],
+      },
+    },
+    {
+      id: 'k2',
+      tag: 'keep',
+      note: '',
+      anchor: { quote: 'Rollback is a', approx: false, prefix: '', suffix: '', lines: [4, 4] },
+    },
+    {
+      id: 'c3',
+      tag: 'q',
+      note: 'Are these list prices?',
+      anchor: {
+        quote: '',
+        approx: false,
+        prefix: '',
+        suffix: '',
+        lines: [8, 11],
+        block: { kind: 'table', label: 'table under "Costs"' },
+      },
+    },
+    { id: 'c4', tag: 'general', note: 'Tone is too salesy overall' },
+  ].map((i) => ({
+    ...i,
+    rev: 0,
+    status: 'open',
+    carried: 0,
+    authorId: OWNER,
+    createdAt: ago(0),
+  })),
+};
+
 // Revisions for the drawer/diff UAT: original + two edits on "Code blocks".
 const codeV1 = CODE.replace('Inline `code` too.', 'Inline `code` too. Edited once.');
 const codeV2 = codeV1 + '\nSecond edit appends a line.\n';
@@ -165,6 +229,7 @@ export async function seedScenarios(env) {
       ownerId: OTHER,
       visibility: 'link',
     }),
+    note(SEED_IDS.review, 'Review me', REVIEW, { createdDays: 0 }),
   ];
 
   // "Code blocks" ships with a revision history (see codeRevisions below).
@@ -210,6 +275,8 @@ export async function seedScenarios(env) {
     { id: SEED_IDS.archived, filename: 'Archived note', source: 'paste', viewedAt: ago(31) },
   ];
   await env.HISTORY.put(`history:${OWNER}`, JSON.stringify(history));
+
+  await env.HISTORY.put(`comments:${SEED_IDS.review}`, JSON.stringify(REVIEW_COMMENTS));
 
   return {
     notes: notes.length,
