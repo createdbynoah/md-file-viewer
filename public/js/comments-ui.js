@@ -188,6 +188,7 @@ export function initComments(deps) {
   // Bumped by every openComposer so a save that resolves late can tell whether
   // the composer it belongs to is still the one on screen.
   let composerToken = 0;
+  let composerView = null; // { composer, title, quoted } while a composer is open
   let sheet = null; // bottom sheet, sheet layout
   let sheetKind = null; // 'composer' | 'item' | 'list'
   let sheetBody = null;
@@ -508,6 +509,18 @@ export function initComments(deps) {
       document.documentElement.style.setProperty('--kb-inset', '0px');
     }
     composing = false;
+    composerView = null;
+  }
+
+  /** Put the composer into the current layout's container (sheet or popover). */
+  function presentComposer(view, rect) {
+    if (layout() === 'sheet')
+      openSheet('composer', view.title, [...view.quoted, view.composer.node]);
+    else openPopover([view.composer.node], rect);
+    // openSheet() starts with closeFloating(), which clears these — set them last.
+    composerView = view;
+    composing = true;
+    view.composer.focus();
   }
 
   /** opts: { anchor, rect } for new | { existing } to edit | { general } for the doc note. */
@@ -532,22 +545,16 @@ export function initComments(deps) {
         window.getSelection().removeAllRanges();
       },
     });
-    if (layout() === 'sheet') {
-      const target = opts.anchor || (existing && existing.anchor) || null;
-      const quoted = target
-        ? [
-            el('p', {
-              className: 'review-sheet-quote',
-              textContent: target.block ? `[${target.block.label}]` : target.quote,
-            }),
-          ]
-        : [];
-      openSheet('composer', isGeneral ? 'General note' : 'Comment', [...quoted, composer.node]);
-    } else {
-      openPopover([composer.node], opts.rect);
-    }
-    composing = true;
-    composer.focus();
+    const target = opts.anchor || (existing && existing.anchor) || null;
+    const quoted = target
+      ? [
+          el('p', {
+            className: 'review-sheet-quote',
+            textContent: target.block ? `[${target.block.label}]` : target.quote,
+          }),
+        ]
+      : [];
+    presentComposer({ composer, title: isGeneral ? 'General note' : 'Comment', quoted }, opts.rect);
   }
 
   /** Tap on a highlight where there is no rail: show that one comment. */
@@ -636,7 +643,7 @@ export function initComments(deps) {
     if (!window.getSelection().isCollapsed) return;
     // A composer in a sheet covers the note; a tap through to it would open an
     // item view or a block pill and silently drop the unsaved draft.
-    if (composing && layout() === 'sheet') return;
+    if (composing && sheetKind === 'composer') return;
     if (popover) closeFloating();
     for (const item of data.items) {
       const t = targets.get(item.id);
@@ -741,11 +748,15 @@ export function initComments(deps) {
     const next = layout();
     if (next !== currentLayout) {
       // Rotation or a window resize across a breakpoint: stay in review mode,
-      // drop floating UI that belongs to the old layout — except an open
-      // composer, whose unsaved draft would go with it. It keeps the
-      // presentation it was opened in until the user saves or cancels.
+      // drop floating UI that belongs to the old layout. An open composer's
+      // unsaved draft is re-presented in the new layout's container instead
+      // of dropped.
       currentLayout = next;
-      if (!composing) closeFloating();
+      // Move an open composer (and its unsaved draft) into the new layout's
+      // container; the same DOM node is re-parented, so nothing typed is lost.
+      const view = composerView;
+      closeFloating();
+      if (view) presentComposer(view);
       hidePill();
       setDrawer(false);
       if (gutterBtn) gutterBtn.hidden = true;
