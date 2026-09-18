@@ -766,6 +766,10 @@ async function ownedMeta(c) {
 
 const cleanText = (v) => (typeof v === 'string' ? v.trim().slice(0, MAX_COMMENT_TEXT) : '');
 
+/** Tags whose item is meaningless without a note or a replacement. */
+const NEEDS_TEXT = ['fix', 'q', 'general'];
+const missingRequiredText = (item) => NEEDS_TEXT.includes(item.tag) && !item.note && !item.replace;
+
 function cleanAnchor(a) {
   if (!a || typeof a !== 'object' || !Array.isArray(a.lines)) return null;
   const lines = a.lines.map(Number);
@@ -804,11 +808,12 @@ app.post('/api/files/:id/comments', async (c) => {
   } catch {
     return c.json({ error: 'Invalid JSON' }, 400);
   }
+  if (!body || typeof body !== 'object') return c.json({ error: 'Invalid JSON' }, 400);
   const tag = body.tag;
   if (!COMMENT_TAGS.includes(tag)) return c.json({ error: 'Invalid tag' }, 400);
   const note = cleanText(body.note);
   const replace = cleanText(body.replace);
-  if ((tag === 'fix' || tag === 'q' || tag === 'general') && !note && !replace) {
+  if (missingRequiredText({ tag, note, replace })) {
     return c.json({ error: 'A note is required' }, 400);
   }
 
@@ -858,6 +863,7 @@ app.patch('/api/files/:id/comments/:cid', async (c) => {
   } catch {
     return c.json({ error: 'Invalid JSON' }, 400);
   }
+  if (!body || typeof body !== 'object') return c.json({ error: 'Invalid JSON' }, 400);
   const comments = await readComments(c.env.HISTORY, id);
   const item = comments.items.find((i) => i.id === c.req.param('cid'));
   if (!item) return c.json({ error: 'Comment not found' }, 404);
@@ -879,6 +885,10 @@ app.patch('/api/files/:id/comments/:cid', async (c) => {
     if (replace) item.replace = replace;
     else delete item.replace;
   }
+  // Same rule as POST, applied to the merged item: a PATCH must not leave a
+  // fix/q/general with nothing to act on. `item` is mutated in memory only —
+  // returning before the put leaves the stored comment untouched.
+  if (missingRequiredText(item)) return c.json({ error: 'A note is required' }, 400);
   await c.env.HISTORY.put(commentsKey(id), JSON.stringify(comments));
   return c.json({ item });
 });

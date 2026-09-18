@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { authed, asUser, clearAll, devEnv, json, paste, readJson } from './test-utils/app.js';
+import { authed, asUser, call, clearAll, devEnv, json, paste, readJson } from './test-utils/app.js';
 
 const SRC = '# Plan\n\nShip to all customers soon.\nRollback is one flag.\n';
 const quoteAnchor = (quote, line) => ({
@@ -110,6 +110,64 @@ describe('comments', () => {
         )
       ).status
     ).toBe(404);
+    expect(
+      (await authed(`/api/files/${id}/comments/c1`, { method: 'DELETE', ...other })).status
+    ).toBe(404);
+  });
+
+  it('rejects a JSON body that is not an object', async () => {
+    const nullBody = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'null',
+    };
+    expect((await authed(`/api/files/${id}/comments`, nullBody)).status).toBe(400);
+    await post(id, { tag: 'fix', note: 'a', anchor: quoteAnchor('soon', 3) });
+    const patchNull = await authed(`/api/files/${id}/comments/c1`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: 'null',
+    });
+    expect(patchNull.status).toBe(400);
+  });
+
+  it('will not let a PATCH empty a note that requires one', async () => {
+    await post(id, { tag: 'fix', note: 'a', replace: 'b', anchor: quoteAnchor('soon', 3) });
+    const patch = (body) => authed(`/api/files/${id}/comments/c1`, json(body, { method: 'PATCH' }));
+    expect((await patch({ note: '', replace: '' })).status).toBe(400);
+    // the rejected PATCH leaves the stored item untouched
+    const still = await (await authed(`/api/files/${id}/comments`)).json();
+    expect(still.items[0]).toMatchObject({ note: 'a', replace: 'b' });
+    // dropping only one of the two is fine while the other remains
+    expect((await patch({ replace: '' })).status).toBe(200);
+    expect((await patch({ note: '' })).status).toBe(400);
+    // a cut needs neither
+    expect((await patch({ tag: 'cut', note: '' })).status).toBe(200);
+  });
+
+  it('requires authentication: an anonymous request gets 401', async () => {
+    expect((await call(`/api/files/${id}/comments`)).status).toBe(401);
+    expect(
+      (
+        await call(
+          `/api/files/${id}/comments`,
+          json({ tag: 'cut', anchor: quoteAnchor('soon', 3) })
+        )
+      ).status
+    ).toBe(401);
+  });
+
+  it('stays owner-only on a link-visible note', async () => {
+    await authed(`/api/files/${id}/visibility`, json({ visibility: 'link' }, { method: 'PATCH' }));
+    await post(id, { tag: 'cut', anchor: quoteAnchor('soon', 3) });
+    const other = { headers: asUser('someone_else') };
+    // the other user can read the note itself...
+    expect((await authed(`/api/files/${id}`, other)).status).toBe(200);
+    // ...but not its comments
+    expect((await authed(`/api/files/${id}/comments`, other)).status).toBe(404);
+    expect((await post(id, { tag: 'cut', anchor: quoteAnchor('soon', 3) }, other)).status).toBe(
+      404
+    );
     expect(
       (await authed(`/api/files/${id}/comments/c1`, { method: 'DELETE', ...other })).status
     ).toBe(404);
