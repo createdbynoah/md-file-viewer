@@ -215,6 +215,12 @@
                   <button id="copy-md-btn" class="text-btn" data-secondary hidden>
                     Copy Markdown
                   </button>
+                  <button id="review-btn" class="text-btn" aria-pressed="false" hidden>
+                    Review
+                  </button>
+                  <button id="copy-feedback-btn" class="text-btn" data-secondary hidden>
+                    Copy feedback
+                  </button>
                   <button id="edit-btn" class="text-btn" hidden>Edit</button>
                   <button id="history-btn" class="text-btn" data-secondary hidden>History</button>
                   <button id="visibility-btn" class="text-btn" hidden></button>
@@ -274,6 +280,12 @@
                 </div>
               </div>
               <article id="rendered-output" class="markdown-body"></article>
+              <aside
+                id="comments-rail"
+                class="comments-rail"
+                aria-label="Review comments"
+                hidden
+              ></aside>
             </div>
           </div>
         </main>

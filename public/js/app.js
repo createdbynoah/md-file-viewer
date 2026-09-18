@@ -6,6 +6,7 @@ import {
 } from './scroll-memory.js';
 import { nextHeaderState } from './header-autohide.js';
 import { sourceLines } from './source-lines.js';
+import { initComments } from './comments-ui.js';
 
 // ── Client logger ───────────────────────────────────────────────────────────
 
@@ -94,6 +95,9 @@ const editorMessage = document.getElementById('editor-message');
 const editorPreviewBtn = document.getElementById('editor-preview-btn');
 const editorCancelBtn = document.getElementById('editor-cancel-btn');
 const editorSaveBtn = document.getElementById('editor-save-btn');
+const reviewBtn = document.getElementById('review-btn');
+const copyFeedbackBtn = document.getElementById('copy-feedback-btn');
+const commentsRail = document.getElementById('comments-rail');
 
 let foldersData = [];
 let currentFileId = null;
@@ -344,6 +348,21 @@ async function api(path, opts = {}) {
 
 let currentUser = null;
 let currentNote = null; // { id, owned, visibility, currentRev }
+
+const comments = initComments({
+  root: renderedOutput,
+  scroller: document.querySelector('.viewer-scroll'),
+  rail: commentsRail,
+  reviewBtn,
+  copyBtn: copyFeedbackBtn,
+  api,
+  getNote: () => currentNote,
+  getSource: () => currentRawMarkdown,
+  getTitle: () => currentFilename || 'Untitled',
+  flashCopied,
+  // Review mode pins the header (see headerLocked).
+  onModeChange: () => showHeader(),
+});
 
 async function checkAuth() {
   try {
@@ -974,6 +993,8 @@ async function viewFile(id, { updateUrl = true } = {}) {
     };
     copyMdBtn.hidden = false;
     applyOwnerControls();
+    comments.setReviewMode(false);
+    comments.load();
     if (data.created) {
       const d = new Date(data.created);
       viewerCreated.textContent =
@@ -1000,6 +1021,8 @@ function applyOwnerControls() {
   folderBtn.hidden = !owned;
   visibilityBtn.hidden = !owned;
   editBtn.hidden = !owned || editing;
+  reviewBtn.hidden = !owned || editing;
+  if (!owned) copyFeedbackBtn.hidden = true;
   historyBtn.hidden = !currentNote;
   copyLinkBtn.hidden = !(currentNote && currentNote.visibility === 'link');
   if (owned) {
@@ -1034,6 +1057,7 @@ function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
   addCodeCopyButtons();
   wrapTables();
+  comments.refresh();
   window.scrollTo(0, 0);
   viewerTitle.textContent = title || 'Markdown Viewer';
   currentFilename = title || 'Markdown Viewer';
@@ -1088,6 +1112,7 @@ function showInputArea({ updateUrl = true } = {}) {
   currentRawMarkdown = null;
   currentFilename = null;
   currentNote = null;
+  comments.clear();
   copyMdBtn.hidden = true;
   folderBtn.hidden = true;
   visibilityBtn.hidden = true;
@@ -1106,6 +1131,7 @@ let saving = false;
 
 function enterEditMode() {
   if (!currentNote || !currentNote.owned || currentRawMarkdown == null) return;
+  comments.setReviewMode(false);
   editing = true;
   editorInput.value = currentRawMarkdown;
   editorInput.hidden = false;
@@ -1243,6 +1269,7 @@ function fmtWhen(iso) {
 }
 
 async function openRevisions() {
+  comments.setReviewMode(false);
   if (!currentNote) return;
   const res = await fetch(`/api/files/${encodeURIComponent(currentNote.id)}/revisions`);
   if (!res.ok) return;
@@ -1407,6 +1434,7 @@ let headerFrame = 0;
 function headerLocked() {
   return (
     editing ||
+    comments.isReviewing() ||
     !revisionsDrawer.hidden ||
     !moreMenu.hidden ||
     !folderDropdown.hidden ||
