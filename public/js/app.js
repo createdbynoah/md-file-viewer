@@ -5,6 +5,7 @@ import {
   loadScrollRatio,
 } from './scroll-memory.js';
 import { nextHeaderState } from './header-autohide.js';
+import { sourceLines } from './source-lines.js';
 
 // ── Client logger ───────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ const md = window.markdownit({
     return '';
   },
 });
+md.use(sourceLines);
 
 // ── DOM refs ────────────────────────────────────────────────────────────────
 
