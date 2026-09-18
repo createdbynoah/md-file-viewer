@@ -1486,7 +1486,9 @@ body.read-only #back-btn {
   color: var(--accent);
 }
 .comment-popover textarea,
-.comment-popover input {
+.comment-popover input,
+.review-sheet textarea,
+.review-sheet input {
   width: 100%;
   font: inherit;
   font-size: 0.8125rem;
@@ -1497,7 +1499,8 @@ body.read-only #back-btn {
   color: var(--text);
   resize: vertical;
 }
-.comment-popover input {
+.comment-popover input,
+.review-sheet input {
   margin-top: 6px;
 }
 .comment-composer-foot {
@@ -1545,7 +1548,7 @@ body.read-only #back-btn {
   margin-bottom: 8px;
 }
 .comment-popover .comment-card,
-.review-sheet .comment-card {
+.review-sheet[data-kind='item'] .comment-card {
   border: 0;
   padding: 0;
   margin: 0;
@@ -1630,6 +1633,7 @@ body.read-only #back-btn {
   display: flex;
   flex-direction: column;
   max-height: min(70vh, calc(100vh - var(--kb-inset, 0px) - 48px));
+  max-height: min(70dvh, calc(100dvh - var(--kb-inset, 0px) - 48px));
   padding: 8px 16px calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -1674,6 +1678,9 @@ body.read-only #back-btn {
   display: none;
 }
 .review-sheet .comment-card-actions {
+  display: flex;
+}
+.comments-list .comment-card-actions {
   display: flex;
 }
 

@@ -197,6 +197,7 @@ export function initComments(deps) {
   let barSummary = null;
   let selectionTimer = 0;
   let currentLayout = layoutFor(window.innerWidth);
+  let lastWidth = window.innerWidth;
   /** @type {Map<string, { range: Range|null, block: Element|null, lines: [number, number] }>} */
   let targets = new Map();
 
@@ -452,6 +453,7 @@ export function initComments(deps) {
   // ── Floating UI: popover (≥768) and bottom sheet (<768) ───────────────────
 
   function syncInset() {
+    if (!sheet) return;
     const vv = window.visualViewport;
     const inset = vv
       ? keyboardInset({
@@ -474,6 +476,7 @@ export function initComments(deps) {
     ]);
     sheet.setAttribute('role', 'dialog');
     sheet.setAttribute('aria-label', title);
+    sheet.dataset.kind = kind;
     sheetKind = kind;
     document.body.append(sheet);
     syncInset();
@@ -498,6 +501,7 @@ export function initComments(deps) {
       sheet = null;
       sheetKind = null;
       sheetBody = null;
+      document.documentElement.style.setProperty('--kb-inset', '0px');
     }
     composing = false;
   }
@@ -640,6 +644,9 @@ export function initComments(deps) {
     }
     // Touch has no hover, so a plain tap on a block offers the block comment.
     if (!usesPill()) return;
+    if (e.target.closest && e.target.closest('a, button, input, textarea, select, summary')) {
+      return hidePill();
+    }
     const block = outermostBlock(root, e.target);
     if (!block || block === pendingBlock) return hidePill();
     const { kind, label } = describeBlock(block);
@@ -701,6 +708,10 @@ export function initComments(deps) {
   }
 
   function onResize() {
+    // A mobile URL-bar collapse/expand fires resize without changing width;
+    // don't drop an open item sheet/popover or reposition the rail for that.
+    if (window.innerWidth === lastWidth) return;
+    lastWidth = window.innerWidth;
     const next = layout();
     if (next !== currentLayout) {
       // Rotation or a window resize across a breakpoint: stay in review mode,
