@@ -25,6 +25,15 @@ describe('keyboardInset', () => {
   it('never goes negative (pinch zoom, overscroll)', () => {
     expect(keyboardInset({ innerHeight: 800, vvHeight: 820, vvOffsetTop: 0 })).toBe(0);
   });
+  it('is zero while pinch-zoomed in, where the shrunken viewport is not a keyboard', () => {
+    expect(keyboardInset({ innerHeight: 800, vvHeight: 400, vvOffsetTop: 0, scale: 2 })).toBe(0);
+  });
+  it('still reports the keyboard at the unzoomed scale', () => {
+    expect(keyboardInset({ innerHeight: 800, vvHeight: 460, vvOffsetTop: 0, scale: 1 })).toBe(340);
+    expect(keyboardInset({ innerHeight: 800, vvHeight: 460, vvOffsetTop: 0, scale: 1.005 })).toBe(
+      340
+    );
+  });
 });
 
 describe('summarize / summaryLabel', () => {

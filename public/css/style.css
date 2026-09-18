@@ -876,9 +876,21 @@ body {
   display: none;
 }
 
-/* Buttons with a long and short label show the short one on narrow screens. */
+/* Buttons with a long and short label show the short one on narrow screens.
+   The swap starts at the tablet breakpoint, not the mobile one: the toolbar is
+   already tight at 768–1023, more so in review mode. */
 .label-short {
   display: none;
+}
+
+@media (max-width: 1023px) {
+  .label-long {
+    display: none;
+  }
+
+  .label-short {
+    display: inline;
+  }
 }
 
 .viewer-toolbar {
@@ -1189,14 +1201,6 @@ body {
     color: var(--danger);
   }
 
-  .label-long {
-    display: none;
-  }
-
-  .label-short {
-    display: inline;
-  }
-
   .markdown-body {
     padding: 24px 16px;
   }
@@ -1503,6 +1507,14 @@ body.read-only #back-btn {
 .review-sheet input {
   margin-top: 6px;
 }
+/* A touch device wide enough for the popover composer (landscape phone, tablet)
+   still needs 16px fields, or iOS zooms the page in on focus and stays there. */
+@media (pointer: coarse) {
+  .comment-popover textarea,
+  .comment-popover input {
+    font-size: 1rem;
+  }
+}
 .comment-composer-foot {
   display: flex;
   justify-content: space-between;
@@ -1562,6 +1574,15 @@ body.read-only #back-btn {
   .comments-rail,
   .comment-gutter-btn {
     display: none !important;
+  }
+}
+
+/* Touch has no hover, so the note itself is the tap target for a highlight or a
+   block comment; make that legible and drop the grey tap flash. */
+@media (pointer: coarse) {
+  .viewer-scroll.reviewing #rendered-output {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
 }
 
@@ -1692,5 +1713,28 @@ body.read-only #back-btn {
   /* Room for the review bar so the note's last lines stay reachable. */
   .viewer-scroll.reviewing {
     padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  /* The mobile sidebar (z 30) slides over the note, but the review chrome lives
+     on document.body at z 65/66; get it out of the way while the drawer is up.
+     Desktop is untouched: there .sidebar.open is the resting state. */
+  body:has(#sidebar.open) .review-bar,
+  body:has(#sidebar.open) .comment-pill {
+    display: none;
+  }
+}
+
+/* Review mode adds three more buttons to a toolbar that is already full at
+   tablet widths, and the ••• collapse only starts below 768; let the row wrap
+   instead of wrapping each button's label onto two lines. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .viewer-toolbar-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 4px;
+  }
+
+  .viewer-toolbar .text-btn {
+    white-space: nowrap;
   }
 }

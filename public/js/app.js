@@ -419,6 +419,9 @@ function showLogin() {
   loginLink.href = `/api/auth/login${next}`;
   loginScreen.hidden = false;
   appScreen.hidden = true;
+  // Review chrome (pill, bar, sheets) is appended to document.body, so it would
+  // otherwise float over the login screen after a 401 mid-review.
+  comments.clear();
   stopPolling();
 }
 

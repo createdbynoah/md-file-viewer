@@ -11,8 +11,13 @@ export function layoutFor(width) {
   return width >= DRAWER_MIN_WIDTH ? 'drawer' : 'sheet';
 }
 
-/** Pixels of the layout viewport's bottom covered by the on-screen keyboard. */
-export function keyboardInset({ innerHeight, vvHeight, vvOffsetTop }) {
+/**
+ * Pixels of the layout viewport's bottom covered by the on-screen keyboard.
+ * Pinch-zooming shrinks the visual viewport the same way a keyboard does, so a
+ * scale above 1 means the difference is zoom, not a keyboard: report nothing.
+ */
+export function keyboardInset({ innerHeight, vvHeight, vvOffsetTop, scale = 1 }) {
+  if (scale > 1.01) return 0;
   return Math.max(0, Math.round(innerHeight - vvHeight - vvOffsetTop));
 }
 

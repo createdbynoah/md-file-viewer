@@ -185,6 +185,9 @@ export function initComments(deps) {
   let activeId = null;
   let popover = null; // composer or item view, rail/drawer layouts
   let composing = false;
+  // Bumped by every openComposer so a save that resolves late can tell whether
+  // the composer it belongs to is still the one on screen.
+  let composerToken = 0;
   let sheet = null; // bottom sheet, sheet layout
   let sheetKind = null; // 'composer' | 'item' | 'list'
   let sheetBody = null;
@@ -460,6 +463,7 @@ export function initComments(deps) {
           innerHeight: window.innerHeight,
           vvHeight: vv.height,
           vvOffsetTop: vv.offsetTop,
+          scale: vv.scale,
         })
       : 0;
     document.documentElement.style.setProperty('--kb-inset', `${inset}px`);
@@ -512,6 +516,7 @@ export function initComments(deps) {
     hidePill();
     const existing = opts.existing || opts.general || null;
     const isGeneral = 'general' in opts;
+    const token = ++composerToken;
     const composer = buildComposer({
       existing,
       isGeneral,
@@ -520,6 +525,9 @@ export function initComments(deps) {
       onSubmit: async ({ body, tag, tagLocked }) => {
         if (existing) await patch(existing.id, tagLocked ? body : { ...body, tag });
         else await create({ ...body, tag, ...(isGeneral ? {} : { anchor: opts.anchor }) });
+        // The user may have cancelled this composer and opened another while
+        // the save was in flight; don't tear that one down.
+        if (token !== composerToken) return;
         closeFloating();
         window.getSelection().removeAllRanges();
       },
@@ -618,12 +626,18 @@ export function initComments(deps) {
     );
   }
 
-  function onClick(e) {
+  /**
+   * A click inside the rendered note. Registered on `root` rather than left to
+   * the document listener: iOS only delivers synthesized clicks from `document`
+   * for nodes it considers clickable, and note prose is not one of them.
+   */
+  function onNoteClick(e) {
     if (!active() || isChrome(e.target)) return;
-    const collapsed = window.getSelection().isCollapsed;
-    if (popover && collapsed) closeFloating();
-    if (!collapsed) return;
-    if (!root.contains(e.target)) return hidePill();
+    if (!window.getSelection().isCollapsed) return;
+    // A composer in a sheet covers the note; a tap through to it would open an
+    // item view or a block pill and silently drop the unsaved draft.
+    if (composing && layout() === 'sheet') return;
+    if (popover) closeFloating();
     for (const item of data.items) {
       const t = targets.get(item.id);
       if (!t || !t.range || item.status !== 'open') continue;
@@ -655,6 +669,18 @@ export function initComments(deps) {
       { anchor: blockAnchor(parseLines(block), kind, label), rect: block.getBoundingClientRect() },
       block
     );
+  }
+
+  /**
+   * A click anywhere outside the note: drop the pill and close a popover
+   * composer/item view. In-note clicks bubble here too, so they are skipped —
+   * `root`'s own listener has already handled them.
+   */
+  function onOutsideClick(e) {
+    if (!active() || isChrome(e.target) || root.contains(e.target)) return;
+    if (!window.getSelection().isCollapsed) return;
+    if (popover) closeFloating();
+    hidePill();
   }
 
   function onHover(e) {
@@ -715,9 +741,11 @@ export function initComments(deps) {
     const next = layout();
     if (next !== currentLayout) {
       // Rotation or a window resize across a breakpoint: stay in review mode,
-      // drop floating UI that belongs to the old layout.
+      // drop floating UI that belongs to the old layout — except an open
+      // composer, whose unsaved draft would go with it. It keeps the
+      // presentation it was opened in until the user saves or cancels.
       currentLayout = next;
-      closeFloating();
+      if (!composing) closeFloating();
       hidePill();
       setDrawer(false);
       if (gutterBtn) gutterBtn.hidden = true;
@@ -743,7 +771,8 @@ export function initComments(deps) {
   });
   document.addEventListener('mouseup', onSelectionEnd);
   document.addEventListener('selectionchange', onSelectionChange);
-  document.addEventListener('click', onClick);
+  document.addEventListener('click', onOutsideClick);
+  root.addEventListener('click', onNoteClick);
   root.addEventListener('mouseover', onHover);
   window.addEventListener('resize', onResize);
   if (window.visualViewport) {
@@ -753,9 +782,20 @@ export function initComments(deps) {
 
   return {
     load,
+    /**
+     * Drop the note's comments and every piece of review chrome. The pill, bar
+     * and sheets live on document.body, so this must run on every path that
+     * leaves the note or the app (including showLogin) — `setReviewMode(false)`
+     * alone no-ops when review mode was never on.
+     */
     clear() {
       data = { round: 1, items: [] };
       setReviewMode(false);
+      closeFloating();
+      hidePill();
+      setDrawer(false);
+      if (gutterBtn) gutterBtn.hidden = true;
+      activeId = null;
       repaint();
     },
     refresh: repaint,
