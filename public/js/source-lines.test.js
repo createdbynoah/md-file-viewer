@@ -34,4 +34,9 @@ describe('sourceLines', () => {
     expect(html).not.toContain('</p data-line');
     expect(md.renderInline('a *b*')).not.toContain('data-line');
   });
+  it('stamps indented code on the pre element', () => {
+    const indentedSrc = 'Para\n\n    indented()\n    more()\n';
+    const indentedHtml = md.render(indentedSrc);
+    expect(indentedHtml).toContain('<pre data-line="3,4"><code>');
+  });
 });
