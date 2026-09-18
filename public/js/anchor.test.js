@@ -8,6 +8,7 @@ import {
   locate,
   nthInLines,
   wsRegex,
+  anchorAt,
 } from './anchor.js';
 
 const SRC = [
@@ -161,6 +162,21 @@ describe('wsRegex', () => {
       'don\'t "ship" on Fridays -- ever...'
     );
     expect('an em — dash'.match(wsRegex('em --- dash'))[0]).toBe('em — dash');
+  });
+});
+
+describe('anchorAt', () => {
+  it('builds an exact anchor with fresh context and lines', () => {
+    const src = 'one\ntwo three four\nfive';
+    const start = src.indexOf('three');
+    const a = anchorAt(src, start, start + 5);
+    expect(a).toEqual({
+      quote: 'three',
+      approx: false,
+      prefix: 'one\ntwo ',
+      suffix: ' four\nfive',
+      lines: [2, 2],
+    });
   });
 });
 

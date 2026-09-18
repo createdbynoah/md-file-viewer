@@ -104,6 +104,20 @@ export function findAll(source, quote) {
 }
 
 /**
+ * Exact anchor for the source substring [start, end).
+ * @returns {Anchor}
+ */
+export function anchorAt(source, start, end) {
+  return {
+    quote: source.slice(start, end),
+    approx: false,
+    prefix: source.slice(Math.max(0, start - CONTEXT_LEN), start),
+    suffix: source.slice(end, end + CONTEXT_LEN),
+    lines: [lineAt(source, start), lineAt(source, end - 1)],
+  };
+}
+
+/**
  * @param {string} source raw markdown
  * @param {[number, number]} lines 1-based inclusive range the selection sits in
  * @param {string} selectedText the rendered text the user selected
@@ -124,14 +138,7 @@ export function captureAnchor(source, lines, selectedText, nth = 0) {
     };
   }
   const start = slice.offset + m.index;
-  const end = start + m[0].length;
-  return {
-    quote: m[0],
-    approx: false,
-    prefix: source.slice(Math.max(0, start - CONTEXT_LEN), start),
-    suffix: source.slice(end, end + CONTEXT_LEN),
-    lines: [lineAt(source, start), lineAt(source, end - 1)],
-  };
+  return anchorAt(source, start, start + m[0].length);
 }
 
 /** @returns {Anchor} */
