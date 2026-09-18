@@ -1590,6 +1590,10 @@ body.read-only #back-btn {
   padding: 10px 16px;
   border: 0;
   border-radius: 999px;
+  /* Buttons get a UA background (e.g. buttonface) by default, which would
+     defeat the ::before-only-paints-background rule above. */
+  background: none;
+  appearance: none;
   font: inherit;
   font-size: 0.875rem;
   font-weight: 500;
