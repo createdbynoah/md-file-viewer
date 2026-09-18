@@ -720,12 +720,10 @@ In the POST comments handler, replace `anchor.lines = hit.lines;` with:
 // Context drives triage later (replacedBy is found between prefix and suffix),
 // so never trust the client's copy of it.
 anchor =
-  hit.start == null
-    ? { ...anchor, lines: hit.lines }
-    : anchorAt(await sourceText, hit.start, hit.end);
+  hit.start == null ? { ...anchor, lines: hit.lines } : anchorAt(sourceText, hit.start, hit.end);
 ```
 
-where `sourceText` is the note text already read for `locate` (hoist `const sourceText = await obj.text();` and drop the `await` above; `anchor` must be declared with `let`). Add `anchorAt` to the existing `anchor.js` import. Add one assertion to the existing "creates comments…" integration test: `expect(item.anchor.prefix).toBe('# Plan\n\nShip to all customers ');` (the client sent an empty prefix).
+where `sourceText` is the note text already read for `locate` (hoist it: `const sourceText = await obj.text();` then `locate(sourceText, anchor)`; `anchor` is already declared with `let`). Block and approx anchors (`hit.start == null`) keep their client fields and only get the resolved lines. Add `anchorAt` to the existing `anchor.js` import. Add one assertion to the existing "creates comments…" integration test: `expect(item.anchor.prefix).toBe('# Plan\n\nShip to all customers ');` (the client sent an empty prefix).
 
 In the PUT handler, after `await c.env.HISTORY.put(\`meta:${id}\`, JSON.stringify(meta));`and before the`log.info('file.edit', …)` line:
 
