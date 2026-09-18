@@ -15,9 +15,9 @@ const HIGHLIGHT_FOR = {
 };
 const CARD_GAP = 8;
 const canHighlight = typeof CSS !== 'undefined' && 'highlights' in CSS;
-// A1 is desktop-only (see style.css); Copy feedback must not leak into the
-// mobile ••• menu, which lists every [data-secondary] button regardless of
-// its `hidden` attribute state.
+// A1 is desktop-only (see style.css). The mobile ••• menu skips [data-secondary]
+// buttons that are `hidden`, so keeping Copy feedback hidden below 1024px is
+// what keeps it out of that menu.
 const desktop = window.matchMedia('(min-width: 1024px)');
 
 function el(tag, props = {}, children = []) {
@@ -42,15 +42,86 @@ function blockFor(root, [s, e]) {
   return best ? best.node : null;
 }
 
-/** DOM Range for the nth whitespace-tolerant match of `quote` inside `scope`. */
-function rangeForQuote(scope, quote, nth) {
-  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+/** Union of the line ranges of `nodes`, or null when there are none. */
+function unionLines(nodes) {
+  if (!nodes.length) return null;
+  return nodes.reduce(
+    ([s, e], node) => {
+      const [bs, be] = parseLines(node);
+      return [Math.min(s, bs), Math.max(e, be)];
+    },
+    [Infinity, -Infinity]
+  );
+}
+
+/**
+ * The element(s) whose rendered text a quote for `lines` should be searched in:
+ * the single smallest block covering the range when there is one, otherwise the
+ * top-level stamped blocks the range touches (a selection running from one
+ * paragraph into the next heading has no single covering block).
+ * @returns {Element[]}
+ */
+function blockScopes(root, [s, e]) {
+  const covering = blockFor(root, [s, e]);
+  if (covering) return [covering];
+  const out = [];
+  for (const node of root.querySelectorAll('[data-line]')) {
+    if (node.parentElement && node.parentElement.closest('[data-line]')) continue;
+    const [bs, be] = parseLines(node);
+    if (be < s || bs > e) continue;
+    out.push(node);
+  }
+  return out;
+}
+
+// Blocks are separated by a newline in the concatenated text so a quote that
+// spans two of them still matches (source has a blank line there; the DOM has
+// nothing between the two text nodes).
+const SCOPE_GAP = '\n';
+
+/** Text nodes of `scopes` in document order, with offsets into their concatenation. */
+function textMap(scopes) {
   const nodes = [];
   let text = '';
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    nodes.push({ node: n, start: text.length });
-    text += n.data;
+  for (const scope of scopes) {
+    if (text) text += SCOPE_GAP;
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      nodes.push({ node: n, start: text.length });
+      text += n.data;
+    }
   }
+  return { nodes, text };
+}
+
+/** Offset of a DOM point within `map`'s concatenated text, or null. */
+function offsetOfPoint(map, container, offset) {
+  if (container.nodeType === Node.TEXT_NODE) {
+    const entry = map.nodes.find((n) => n.node === container);
+    return entry ? entry.start + offset : null;
+  }
+  const child = container.childNodes[offset] || container.lastChild;
+  if (!child) return null;
+  const entry = map.nodes.find((n) => n.node === child || child.contains(n.node));
+  return entry ? entry.start : null;
+}
+
+/**
+ * 0-based index of the occurrence starting at a DOM point among the matches of
+ * `quote` in `scopes` — the rendered-side twin of `nthInLines`, so a repeated
+ * phrase anchors to the occurrence the user actually selected.
+ */
+function occurrenceAt(scopes, quote, container, offset) {
+  if (!quote.trim()) return 0;
+  const map = textMap(scopes);
+  const at = offsetOfPoint(map, container, offset);
+  if (at == null) return 0;
+  return [...map.text.matchAll(wsRegex(quote))].filter((m) => m.index < at).length;
+}
+
+/** DOM Range for the nth whitespace-tolerant match of `quote` across `scopes`. */
+function rangeForQuote(scopes, quote, nth) {
+  const { nodes, text } = textMap(scopes);
   const matches = [...text.matchAll(wsRegex(quote))];
   const m = matches[Math.min(nth, matches.length - 1)];
   if (!m) return null;
@@ -127,14 +198,17 @@ export function initComments(deps) {
       if (!item.anchor) continue;
       const hit = locate(source, item.anchor);
       if (!hit) continue;
-      const block = blockFor(root, hit.lines);
+      const scopes = blockScopes(root, hit.lines);
+      // Position by the first block the anchor touches; a range spanning two
+      // blocks has no covering element but is still perfectly locatable.
+      const block = blockFor(root, hit.lines) || scopes[0] || null;
       let range = null;
-      if (!item.anchor.block && block) {
+      if (!item.anchor.block && scopes.length) {
         const nth =
           hit.start == null
             ? 0
-            : nthInLines(source, parseLines(block), hit.start, item.anchor.quote);
-        range = rangeForQuote(block, item.anchor.quote, nth);
+            : nthInLines(source, unionLines(scopes), hit.start, item.anchor.quote);
+        range = rangeForQuote(scopes, item.anchor.quote, nth);
       }
       targets.set(item.id, { range, block });
     }
@@ -195,11 +269,13 @@ export function initComments(deps) {
 
     const placed = data.items
       .filter((i) => i.anchor)
-      .map((item) => ({ item, top: targetTop(item) }))
+      // Only an anchor that `locate` could not resolve is orphaned; a resolved
+      // one that happens to have no rect yet just falls to the next free slot.
+      .map((item) => ({ item, top: targetTop(item), orphaned: !targets.has(item.id) }))
       .sort((a, b) => (a.top ?? Infinity) - (b.top ?? Infinity));
     let floor = generalCard.offsetTop + generalCard.offsetHeight + CARD_GAP;
-    for (const { item, top } of placed) {
-      const card = buildCard(item, top == null);
+    for (const { item, top, orphaned } of placed) {
+      const card = buildCard(item, orphaned);
       rail.append(card);
       const y = Math.max(top ?? floor, floor);
       card.style.top = `${y}px`;
@@ -273,8 +349,17 @@ export function initComments(deps) {
   async function create(body) {
     const res = await api(base(), { method: 'POST', body: JSON.stringify(body) });
     if (res.status === 409) {
-      await load();
-      throw new Error('The note changed. Select the text again.');
+      // The source we anchored against is stale, so reloading only the comments
+      // would leave the same stale text on screen and 409 again. Reload the
+      // whole note (which also reloads comments and drops review mode).
+      const wasReviewing = reviewing;
+      closeComposer();
+      await deps.reloadNote();
+      if (wasReviewing) setReviewMode(true);
+      // The composer and its inline error slot went with the re-render, so say
+      // it at app level (as app.js does for a failed save).
+      window.alert('The note changed and was reloaded. Select the text again.');
+      return;
     }
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not save');
     const { item } = await res.json();
@@ -302,6 +387,9 @@ export function initComments(deps) {
   async function load() {
     data = { round: 1, items: [] };
     activeId = null;
+    // Hide it up front: the await below is long enough for the previous note's
+    // button to stay on screen while a different note is already rendered.
+    copyBtn.hidden = true;
     const current = note();
     if (current && current.owned) {
       try {
@@ -423,11 +511,17 @@ export function initComments(deps) {
     const first = closestBlock(range.startContainer);
     const last = closestBlock(range.endContainer);
     if (!first || !last) return;
-    const lines = [
+    const spanned = [
       Math.min(parseLines(first)[0], parseLines(last)[0]),
       Math.max(parseLines(first)[1], parseLines(last)[1]),
     ];
-    const anchor = captureAnchor(deps.getSource(), lines, sel.toString());
+    // Count the selected occurrence in exactly the scopes the highlight will be
+    // searched in later, so capture and repaint agree on which one it is.
+    const scopes = blockScopes(root, spanned);
+    const lines = unionLines(scopes) || spanned;
+    const text = sel.toString();
+    const nth = occurrenceAt(scopes, text, range.startContainer, range.startOffset);
+    const anchor = captureAnchor(deps.getSource(), lines, text, nth);
     if (!anchor.quote) return;
     openComposer({ anchor, rect: range.getBoundingClientRect() });
   }

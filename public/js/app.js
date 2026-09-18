@@ -360,6 +360,9 @@ const comments = initComments({
   getSource: () => currentRawMarkdown,
   getTitle: () => currentFilename || 'Untitled',
   flashCopied,
+  // Re-fetch and re-render the note after the server reports the source moved
+  // under us (POST /comments → 409), so the next selection anchors cleanly.
+  reloadNote: () => viewFile(currentNote.id, { updateUrl: false }),
   // Review mode is unavailable while editing or viewing a read-only revision
   // snapshot (see applyOwnerControls and the revViewBtn/closeRevisions wiring).
   canReview: () => !editing && !snapshotShown,
