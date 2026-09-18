@@ -3,6 +3,7 @@ import { getCookie, deleteCookie } from 'hono/cookie';
 import { createLogger } from './logger.js';
 import { seedScenarios } from './seed.js';
 import { verifyAccessJwt } from './auth.js';
+import { excerpt, pathToUuid, uuidToShortId } from './og.js';
 
 /**
  * @typedef {object} Env
@@ -995,27 +996,57 @@ app.post('/api/folders/:id/files/:fileId/move', async (c) => {
 // Note URLs are base36-encoded UUIDs (25 chars, [0-9a-z]); legacy full-UUID
 // URLs are also accepted. The client decodes the path back to the UUID.
 
-const UUID_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SHORT_ID_RE = /^\/[0-9a-z]{25}$/i;
-const UUID_LIMIT = 1n << 128n;
+/**
+ * Social-preview tags for a note path. Only 'link' notes get their name and an
+ * excerpt; everything else (private, legacy, archived, missing) is served the
+ * untouched index so the response reveals nothing — not even existence. The
+ * viewer's identity is deliberately ignored: output never depends on auth.
+ */
+async function noteOgTags(env, id, origin) {
+  const meta = (await getMetaMany(env.HISTORY, [id])).get(id);
+  if (!meta || meta.visibility !== 'link' || meta.archivedAt) return null;
+  const obj = await env.MD_FILES.get(`${id}.md`, { range: { offset: 0, length: OG_READ_BYTES } });
+  const description = obj ? excerpt(await obj.text()) : '';
+  return {
+    title: meta.filename || 'Markdown Viewer',
+    description,
+    url: `${origin}/${uuidToShortId(id)}`,
+  };
+}
 
-function isValidShortId(path) {
-  if (!SHORT_ID_RE.test(path)) return false;
-  let n = 0n;
-  for (const ch of path.slice(1).toLowerCase()) {
-    n = n * 36n + BigInt(parseInt(ch, 36));
-  }
-  return n < UUID_LIMIT;
+const OG_READ_BYTES = 2048;
+const OG_TITLE_SEL = 'meta[property="og:title"], meta[name="twitter:title"]';
+const OG_DESC_SEL =
+  'meta[name="description"], meta[property="og:description"], meta[name="twitter:description"]';
+
+function setContent(value) {
+  return {
+    element(el) {
+      el.setAttribute('content', value);
+    },
+  };
 }
 
 app.get('*', async (c) => {
-  const path = new URL(c.req.url).pathname;
-  if (UUID_RE.test(path) || isValidShortId(path)) {
-    const url = new URL(c.req.url);
-    url.pathname = '/';
-    return c.env.ASSETS.fetch(new Request(url, c.req.raw));
-  }
-  return c.notFound();
+  const url = new URL(c.req.url);
+  const id = pathToUuid(url.pathname);
+  if (!id) return c.notFound();
+
+  const og = await noteOgTags(c.env, id, url.origin);
+  url.pathname = '/';
+  const res = await c.env.ASSETS.fetch(new Request(url, c.req.raw));
+  if (!og) return res;
+
+  let rewriter = new HTMLRewriter()
+    .on('title', {
+      element(el) {
+        el.setInnerContent(og.title);
+      },
+    })
+    .on(OG_TITLE_SEL, setContent(og.title))
+    .on('meta[property="og:url"]', setContent(og.url));
+  if (og.description) rewriter = rewriter.on(OG_DESC_SEL, setContent(og.description));
+  return rewriter.transform(res);
 });
 
 export default {

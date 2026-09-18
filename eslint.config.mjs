@@ -19,7 +19,7 @@ export default [
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
-      globals: { ...globals.serviceworker, ...globals.es2024 },
+      globals: { ...globals.serviceworker, ...globals.es2024, HTMLRewriter: 'readonly' },
     },
   },
   {

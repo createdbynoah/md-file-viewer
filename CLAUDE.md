@@ -32,6 +32,7 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 - `public/js/app.js` — all client logic (auth, file upload, paste, history, markdown rendering); loaded as an ES module
 - `public/js/scroll-memory.js` — pure per-note scroll-position helpers (unit-tested)
 - `public/js/header-autohide.js` — pure show/hide decision for the sticky note toolbar (unit-tested)
+- `public/favicon.*`, `apple-touch-icon.png`, `icon-*.png`, `og-image.png`, `site.webmanifest` — icons + generic social preview (generic OG tags live in `index.html`, absolute URLs on the production domain)
 - `public/css/style.css` — CSS custom properties for light/dark theming
 
 **Storage bindings** (configured in `wrangler.jsonc`):
@@ -82,7 +83,7 @@ Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 
 ## Routing
 
-**Server-side:** A catch-all Hono route at the bottom of `src/worker.js` matches note paths and serves `index.html` via the `ASSETS` binding — this is the SPA fallback so direct file links and browser refresh work. Note URLs are base36-encoded UUIDs (25 chars, `[0-9a-z]`, e.g. `/djmlk8rqmyfbvw0cfe0lkllww`); legacy full-UUID paths are also accepted. Other paths return 404. Storage keys (R2/KV) remain plain UUIDs — the encoding is URL-layer only.
+**Server-side:** A catch-all Hono route at the bottom of `src/worker.js` matches note paths and serves `index.html` via the `ASSETS` binding — this is the SPA fallback so direct file links and browser refresh work. Note URLs are base36-encoded UUIDs (25 chars, `[0-9a-z]`, e.g. `/djmlk8rqmyfbvw0cfe0lkllww`); legacy full-UUID paths are also accepted. Other paths return 404. For `visibility: 'link'` (non-archived) notes the fallback rewrites `<title>`, description, `og:*`/`twitter:*` title+description and `og:url` via `HTMLRewriter` (name + ≤160-char excerpt from a 2 KB ranged R2 read; helpers in `src/og.js`). Every other note path — private, legacy, archived, missing — gets the untouched generic index, regardless of who is asking (output never depends on auth, so it can't leak via caches or reveal existence). Guardrail: `src/og.integration.test.js`. Storage keys (R2/KV) remain plain UUIDs — the encoding is URL-layer only.
 
 **Client-side:** `public/js/app.js` uses `history.pushState` / `popstate` for navigation. Viewing a file pushes `/<base36-id>` to the URL (`uuidToShortId`/`shortIdToUuid` in `app.js`); going back pushes `/`. A legacy `/<uuid>` deep link is decoded and rewritten to the short form via `replaceState`. Functions that change views accept `{ updateUrl: false }` to prevent double-pushing during `popstate` events. On initial load after auth, `showApp()` checks for a deep-linked file ID in the URL path.
 

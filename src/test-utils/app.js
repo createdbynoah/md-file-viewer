@@ -4,11 +4,26 @@
 import { env as baseEnv, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import worker from '../worker.js';
 
+// Mirrors the generic social tags in public/index.html.
+export const INDEX_HEAD = [
+  '<title>Markdown Viewer</title>',
+  '<meta name="description" content="generic description" />',
+  '<meta property="og:title" content="Markdown Viewer" />',
+  '<meta property="og:description" content="generic description" />',
+  '<meta property="og:url" content="https://notebook.noahcancode.com/" />',
+  '<meta property="og:image" content="https://notebook.noahcancode.com/og-image.png" />',
+  '<meta name="twitter:title" content="Markdown Viewer" />',
+  '<meta name="twitter:description" content="generic description" />',
+].join('');
+
 export const assetsStub = {
   fetch: async (req) =>
-    new Response(`<html>index for ${new URL(req.url).pathname}</html>`, {
-      headers: { 'content-type': 'text/html' },
-    }),
+    new Response(
+      `<html><head>${INDEX_HEAD}</head><body>index for ${new URL(req.url).pathname}</body></html>`,
+      {
+        headers: { 'content-type': 'text/html' },
+      }
+    ),
 };
 
 export function makeEnv(overrides = {}) {
