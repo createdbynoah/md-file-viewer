@@ -102,4 +102,34 @@ describe('formatFeedback', () => {
   it('omits empty sections and says so when nothing is open', () => {
     expect(fmt([])).toMatch(/\n\n\(no open feedback\)$/);
   });
+  it('covers VIOLATED section with violated keep item', () => {
+    const out = fmt([
+      item({ id: 'k1', tag: 'keep', status: 'open' }),
+      item({ id: 'k2', tag: 'keep', status: 'violated' }),
+      item({ id: 'c1', tag: 'fix', status: 'open' }),
+    ]);
+    expect(out).toContain('VIOLATED — kept text was changed; restore it');
+    expect(out).toContain('k2 L3 "soon"');
+    expect(out.indexOf('VIOLATED')).toBeLessThan(out.indexOf('KEEP'));
+    expect(out.indexOf('KEEP')).toBeLessThan(out.indexOf('OPEN'));
+  });
+  it('allows optional note on keep items', () => {
+    const out = fmt([item({ id: 'k3', tag: 'keep', note: 'Approved wording' })]);
+    expect(out).toContain('k3 L3 "soon"\n  Approved wording');
+  });
+  it('does not elide quotes of exactly 12 words', () => {
+    const twelve = 'one two three four five six seven eight nine ten eleven twelve';
+    const out = formatFeedback(
+      {
+        round: 1,
+        items: [
+          item({ anchor: { quote: twelve, approx: false, prefix: '', suffix: '', lines: [1, 1] } }),
+        ],
+      },
+      twelve,
+      { title: 'T', rev: 0 }
+    );
+    expect(out).toContain(`"${twelve}"`);
+    expect(out).not.toContain('…');
+  });
 });
