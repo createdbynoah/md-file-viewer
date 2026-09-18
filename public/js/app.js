@@ -1034,6 +1034,7 @@ function renderMarkdown(content, title, id) {
   wrapTables();
   window.scrollTo(0, 0);
   viewerTitle.textContent = title || 'Markdown Viewer';
+  document.title = title || 'Markdown Viewer';
   currentFilename = title || 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', id ? 'true' : 'false');
   inputArea.hidden = true;
@@ -1081,6 +1082,7 @@ function showInputArea({ updateUrl = true } = {}) {
   viewerArea.hidden = true;
   window.scrollTo(0, 0);
   viewerTitle.textContent = 'Markdown Viewer';
+  document.title = 'Markdown Viewer';
   viewerTitle.setAttribute('data-editable', 'false');
   currentFileId = null;
   currentRawMarkdown = null;
