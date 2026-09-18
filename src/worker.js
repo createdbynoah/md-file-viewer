@@ -3,6 +3,7 @@ import { getCookie, deleteCookie } from 'hono/cookie';
 import { createLogger } from './logger.js';
 import { seedScenarios } from './seed.js';
 import { verifyAccessJwt } from './auth.js';
+import { locate } from '../public/js/anchor.js';
 
 /**
  * @typedef {object} Env
@@ -91,6 +92,7 @@ async function touchMeta(kv, id) {
 
 const revKey = (id) => `rev:${id}`;
 const snapshotKey = (id, n) => `${id}/r/${n}.md`;
+const commentsKey = (id) => `comments:${id}`;
 
 async function readRevisions(kv, id) {
   return readJsonArray(kv, revKey(id));
@@ -107,6 +109,7 @@ async function deleteNoteObjects(env, id) {
     cursor = page.cursor;
   }
   await env.HISTORY.delete(revKey(id));
+  await env.HISTORY.delete(commentsKey(id));
 }
 
 function cleanMessage(raw) {
@@ -730,6 +733,166 @@ app.get('/api/files/:id/revisions/:n', async (c) => {
   const obj = await c.env.MD_FILES.get(snapshotKey(id, n));
   if (!obj) return c.json({ error: 'Revision not found' }, 404);
   return c.body(await obj.text(), 200, { 'content-type': 'text/markdown; charset=utf-8' });
+});
+
+// ── Comment routes ──────────────────────────────────────────────────────────
+// Owner-only review comments, one KV value per note. Anchors are resolved
+// against the current markdown source on write (see public/js/anchor.js).
+
+const MAX_COMMENTS = 500;
+const MAX_COMMENT_TEXT = 2000;
+const COMMENT_TAGS = ['fix', 'cut', 'q', 'keep', 'general'];
+const COMMENT_STATUSES = ['open', 'addressed'];
+
+async function readComments(kv, id) {
+  const raw = await kv.get(commentsKey(id));
+  if (!raw) return { nextId: 1, round: 1, items: [] };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { nextId: 1, round: 1, items: [] };
+  }
+}
+
+/** Loads meta and answers null unless the caller owns the note. */
+async function ownedMeta(c) {
+  const meta = await loadMeta(c.env.HISTORY, c.req.param('id'));
+  if (!meta || !isOwner(meta, c.get('user'))) {
+    c.get('logger').warn('file.notFound', { fileId: c.req.param('id') });
+    return null;
+  }
+  return meta;
+}
+
+const cleanText = (v) => (typeof v === 'string' ? v.trim().slice(0, MAX_COMMENT_TEXT) : '');
+
+function cleanAnchor(a) {
+  if (!a || typeof a !== 'object' || !Array.isArray(a.lines)) return null;
+  const lines = a.lines.map(Number);
+  if (lines.length !== 2 || !lines.every(Number.isInteger)) return null;
+  const anchor = {
+    quote: typeof a.quote === 'string' ? a.quote.slice(0, MAX_COMMENT_TEXT) : '',
+    approx: Boolean(a.approx),
+    prefix: typeof a.prefix === 'string' ? a.prefix.slice(-64) : '',
+    suffix: typeof a.suffix === 'string' ? a.suffix.slice(0, 64) : '',
+    lines,
+  };
+  if (a.block && typeof a.block === 'object') {
+    anchor.block = {
+      kind: cleanText(a.block.kind).slice(0, 40),
+      label: cleanText(a.block.label).slice(0, 200),
+    };
+  } else if (!anchor.quote) {
+    return null;
+  }
+  return anchor;
+}
+
+app.get('/api/files/:id/comments', async (c) => {
+  if (!(await ownedMeta(c))) return c.json({ error: 'File not found' }, 404);
+  const { round, items } = await readComments(c.env.HISTORY, c.req.param('id'));
+  return c.json({ round, items });
+});
+
+app.post('/api/files/:id/comments', async (c) => {
+  const id = c.req.param('id');
+  const meta = await ownedMeta(c);
+  if (!meta) return c.json({ error: 'File not found' }, 404);
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+  const tag = body.tag;
+  if (!COMMENT_TAGS.includes(tag)) return c.json({ error: 'Invalid tag' }, 400);
+  const note = cleanText(body.note);
+  const replace = cleanText(body.replace);
+  if ((tag === 'fix' || tag === 'q' || tag === 'general') && !note && !replace) {
+    return c.json({ error: 'A note is required' }, 400);
+  }
+
+  const comments = await readComments(c.env.HISTORY, id);
+  if (comments.items.length >= MAX_COMMENTS) return c.json({ error: 'Too many comments' }, 400);
+
+  let anchor;
+  if (tag === 'general') {
+    if (comments.items.some((i) => i.tag === 'general')) {
+      return c.json({ error: 'General note already exists' }, 400);
+    }
+  } else {
+    anchor = cleanAnchor(body.anchor);
+    if (!anchor) return c.json({ error: 'Invalid anchor' }, 400);
+    const obj = await c.env.MD_FILES.get(`${id}.md`);
+    if (!obj) return c.json({ error: 'File not found' }, 404);
+    const hit = locate(await obj.text(), anchor);
+    if (!hit) return c.json({ error: 'Anchor not found' }, 409);
+    anchor.lines = hit.lines;
+  }
+
+  const item = {
+    id: `${tag === 'keep' ? 'k' : 'c'}${comments.nextId}`,
+    tag,
+    note,
+    ...(replace ? { replace } : {}),
+    ...(anchor ? { anchor } : {}),
+    rev: meta.currentRev || 0,
+    status: 'open',
+    carried: 0,
+    authorId: c.get('user').id,
+    createdAt: new Date().toISOString(),
+  };
+  comments.nextId += 1;
+  comments.items.push(item);
+  await c.env.HISTORY.put(commentsKey(id), JSON.stringify(comments));
+  c.get('logger').info('comment.create', { fileId: id, commentId: item.id, tag });
+  return c.json({ item }, 201);
+});
+
+app.patch('/api/files/:id/comments/:cid', async (c) => {
+  const id = c.req.param('id');
+  if (!(await ownedMeta(c))) return c.json({ error: 'File not found' }, 404);
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+  const comments = await readComments(c.env.HISTORY, id);
+  const item = comments.items.find((i) => i.id === c.req.param('cid'));
+  if (!item) return c.json({ error: 'Comment not found' }, 404);
+
+  if (body.tag !== undefined && body.tag !== item.tag) {
+    const fixed = ['keep', 'general'];
+    if (!COMMENT_TAGS.includes(body.tag) || fixed.includes(body.tag) || fixed.includes(item.tag)) {
+      return c.json({ error: 'Invalid tag change' }, 400);
+    }
+    item.tag = body.tag;
+  }
+  if (body.status !== undefined) {
+    if (!COMMENT_STATUSES.includes(body.status)) return c.json({ error: 'Invalid status' }, 400);
+    item.status = body.status;
+  }
+  if (body.note !== undefined) item.note = cleanText(body.note);
+  if (body.replace !== undefined) {
+    const replace = cleanText(body.replace);
+    if (replace) item.replace = replace;
+    else delete item.replace;
+  }
+  await c.env.HISTORY.put(commentsKey(id), JSON.stringify(comments));
+  return c.json({ item });
+});
+
+app.delete('/api/files/:id/comments/:cid', async (c) => {
+  const id = c.req.param('id');
+  if (!(await ownedMeta(c))) return c.json({ error: 'File not found' }, 404);
+  const comments = await readComments(c.env.HISTORY, id);
+  const before = comments.items.length;
+  comments.items = comments.items.filter((i) => i.id !== c.req.param('cid'));
+  if (comments.items.length === before) return c.json({ error: 'Comment not found' }, 404);
+  await c.env.HISTORY.put(commentsKey(id), JSON.stringify(comments));
+  c.get('logger').info('comment.delete', { fileId: id, commentId: c.req.param('cid') });
+  return c.json({ success: true });
 });
 
 // ── File delete ─────────────────────────────────────────────────────────────
