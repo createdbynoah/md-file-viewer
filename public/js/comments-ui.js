@@ -7,6 +7,7 @@ import { formatFeedback } from './feedback-format.js';
 import { el } from './el.js';
 import { buildCard, buildGeneralCard } from './comments-cards.js';
 import { buildComposer } from './comments-composer.js';
+import { layoutFor, keyboardInset, summarize, summaryLabel } from './review-layout.js';
 
 const HIGHLIGHT_FOR = {
   fix: 'review-fix',
@@ -16,10 +17,6 @@ const HIGHLIGHT_FOR = {
 };
 const CARD_GAP = 8;
 const canHighlight = typeof CSS !== 'undefined' && 'highlights' in CSS;
-// A1 is desktop-only (see style.css). The mobile ••• menu skips [data-secondary]
-// buttons that are `hidden`, so keeping Copy feedback hidden below 1024px is
-// what keeps it out of that menu.
-const desktop = window.matchMedia('(min-width: 1024px)');
 
 function parseLines(node) {
   const [s, e] = node.dataset.line.split(',').map(Number);
@@ -170,18 +167,46 @@ function describeBlock(node) {
   }
 }
 
+/** The outermost stamped block containing `target` (a whole list, not one item). */
+function outermostBlock(root, target) {
+  let block = target && target.closest ? target.closest('[data-line]') : null;
+  while (block && block.parentElement.closest('[data-line]')) {
+    block = block.parentElement.closest('[data-line]');
+  }
+  return block && root.contains(block) ? block : null;
+}
+
 export function initComments(deps) {
-  const { root, scroller, rail, reviewBtn, copyBtn, api } = deps;
+  const { root, scroller, rail, drawer, listBtn, reviewBtn, copyBtn, api } = deps;
+  const drawerList = drawer.querySelector('.comments-list');
+  const coarse = window.matchMedia('(pointer: coarse)');
   let data = { round: 1, items: [] };
   let reviewing = false;
   let activeId = null;
-  let popover = null;
+  let popover = null; // composer or item view, rail/drawer layouts
+  let composing = false;
+  let sheet = null; // bottom sheet, sheet layout
+  let sheetKind = null; // 'composer' | 'item' | 'list'
+  let sheetBody = null;
   let gutterBtn = null;
-  /** @type {Map<string, { range: Range|null, block: Element|null }>} */
+  let gutterBlock = null;
+  let pill = null;
+  let pending = null; // { anchor, rect } captured while the selection existed
+  let pendingBlock = null;
+  let bar = null;
+  let barSummary = null;
+  let selectionTimer = 0;
+  let currentLayout = layoutFor(window.innerWidth);
+  /** @type {Map<string, { range: Range|null, block: Element|null, lines: [number, number] }>} */
   let targets = new Map();
 
   const note = () => deps.getNote();
   const base = () => `/api/files/${encodeURIComponent(note().id)}/comments`;
+  const layout = () => layoutFor(window.innerWidth);
+  const active = () => reviewing && deps.canReview();
+  // Touch selection never produces a usable mouseup, and on a phone a popover
+  // would sit under the native selection callout — both get the pill instead.
+  const usesPill = () => coarse.matches || layout() === 'sheet';
 
   // ── Resolve + paint ───────────────────────────────────────────────────────
 
@@ -194,8 +219,6 @@ export function initComments(deps) {
       const hit = locate(source, item.anchor);
       if (!hit) continue;
       const scopes = blockScopes(root, hit.lines);
-      // Position by the first block the anchor touches; a range spanning two
-      // blocks has no covering element but is still perfectly locatable.
       const block = blockFor(root, hit.lines) || scopes[0] || null;
       let range = null;
       if (!item.anchor.block && scopes.length) {
@@ -205,13 +228,11 @@ export function initComments(deps) {
             : nthInLines(source, unionLines(scopes), hit.start, item.anchor.quote);
         range = rangeForQuote(scopes, item.anchor.quote, nth);
       }
-      targets.set(item.id, { range, block });
+      targets.set(item.id, { range, block, lines: hit.lines });
     }
   }
 
   function paintHighlights() {
-    // Cleanup always runs, even without the Highlight API or while review
-    // mode is unavailable (e.g. a revision snapshot is on screen).
     if (canHighlight) {
       for (const name of [...new Set(Object.values(HIGHLIGHT_FOR)), 'review-active']) {
         CSS.highlights.delete(name);
@@ -219,7 +240,8 @@ export function initComments(deps) {
     }
     for (const node of root.querySelectorAll('.review-block'))
       node.classList.remove('review-block');
-    if (!reviewing || !deps.canReview()) return;
+    if (!active()) return;
+    if (pendingBlock) pendingBlock.classList.add('review-block');
     const groups = {};
     for (const item of data.items) {
       const t = targets.get(item.id);
@@ -237,6 +259,24 @@ export function initComments(deps) {
     }
   }
 
+  // ── Lists: rail (positioned), drawer and list sheet (document order) ──────
+
+  function cardFor(item, orphaned, isActive = item.id === activeId) {
+    return buildCard(item, {
+      orphaned,
+      active: isActive,
+      onActivate: () => {
+        // In a sheet the note is underneath: get out of the way, then scroll.
+        if (layout() === 'sheet') closeFloating();
+        activate(item.id, { scroll: true });
+      },
+      onEdit: () => openComposer({ existing: item }),
+      onToggle: () =>
+        patch(item.id, { status: item.status === 'open' ? 'addressed' : 'open' }).catch(() => {}),
+      onDelete: () => remove(item.id),
+    });
+  }
+
   function targetTop(item) {
     const t = targets.get(item.id);
     const rect =
@@ -246,19 +286,11 @@ export function initComments(deps) {
   }
 
   function renderRail() {
-    rail.replaceChildren();
-    const show = reviewing && deps.canReview();
-    rail.hidden = !show;
-    if (!show) return;
-
     const general = data.items.find((i) => i.tag === 'general');
     const generalCard = buildGeneralCard(general, () => openComposer({ general }));
     rail.append(generalCard);
-
     const placed = data.items
       .filter((i) => i.anchor)
-      // Only an anchor that `locate` could not resolve is orphaned; a resolved
-      // one that happens to have no rect yet just falls to the next free slot.
       .map((item) => ({ item, top: targetTop(item), orphaned: !targets.has(item.id) }))
       .sort((a, b) => (a.top ?? Infinity) - (b.top ?? Infinity));
     let floor = generalCard.offsetTop + generalCard.offsetHeight + CARD_GAP;
@@ -272,29 +304,80 @@ export function initComments(deps) {
     rail.style.height = `${floor}px`;
   }
 
-  function cardFor(item, orphaned, active = item.id === activeId) {
-    return buildCard(item, {
-      orphaned,
-      active,
-      onActivate: () => activate(item.id, { scroll: true }),
-      onEdit: () => openComposer({ existing: item }),
-      onToggle: () =>
-        patch(item.id, { status: item.status === 'open' ? 'addressed' : 'open' }).catch(() => {}),
-      onDelete: () => remove(item.id),
-    });
+  function renderFlatList(host) {
+    const general = data.items.find((i) => i.tag === 'general');
+    host.append(buildGeneralCard(general, () => openComposer({ general })));
+    const line = (item) => targets.get(item.id)?.lines[0] ?? Infinity;
+    const anchored = data.items.filter((i) => i.anchor).sort((a, b) => line(a) - line(b));
+    for (const item of anchored) host.append(cardFor(item, !targets.has(item.id)));
+  }
+
+  function renderList() {
+    const mode = layout();
+    rail.replaceChildren();
+    drawerList.replaceChildren();
+    rail.hidden = !(active() && mode === 'rail');
+    const count = data.items.length;
+    listBtn.hidden = !(active() && mode === 'drawer');
+    listBtn.textContent = count ? `Comments · ${count}` : 'Comments';
+    if (!active() || mode !== 'drawer') setDrawer(false);
+    if (!active()) return;
+    if (mode === 'rail') renderRail();
+    else if (mode === 'drawer' && !drawer.hidden) renderFlatList(drawerList);
+    else if (mode === 'sheet' && sheetKind === 'list') {
+      sheetBody.replaceChildren();
+      renderFlatList(sheetBody);
+    }
+  }
+
+  function setDrawer(open) {
+    drawer.hidden = !open;
+    listBtn.setAttribute('aria-expanded', String(open));
+  }
+
+  // ── Review bar (sheet layout) ─────────────────────────────────────────────
+
+  function renderBar() {
+    const show = active() && layout() === 'sheet';
+    if (!bar) {
+      if (!show) return;
+      barSummary = el('button', { type: 'button', className: 'text-btn review-bar-summary' });
+      barSummary.addEventListener('click', () => {
+        if (sheetKind === 'list') return closeFloating();
+        openSheet('list', 'Comments', []);
+        renderList();
+      });
+      const copy = el('button', {
+        type: 'button',
+        className: 'text-btn',
+        textContent: 'Copy feedback',
+      });
+      copy.addEventListener('click', () => copyFeedback(copy));
+      const done = el('button', { type: 'button', className: 'primary-btn', textContent: 'Done' });
+      done.addEventListener('click', () => setReviewMode(false));
+      bar = el('div', { className: 'review-bar' }, [barSummary, copy, done]);
+      // Before the pill in DOM order: the pill's CSS lifts it above a shown bar.
+      document.body.insertBefore(bar, pill);
+    }
+    bar.hidden = !show;
+    if (show) barSummary.textContent = summaryLabel(summarize(data.items));
   }
 
   function repaint() {
+    // An item view shows a snapshot of one comment; anything that repaints may
+    // have changed it. The composer holds unsaved input, so it is left alone.
+    if (!composing) closeFloating({ keepList: true });
     resolveTargets();
     paintHighlights();
-    renderRail();
-    copyBtn.hidden = !(note() && note().owned && data.items.length && desktop.matches);
+    renderList();
+    renderBar();
+    copyBtn.hidden = !(note() && note().owned && data.items.length);
   }
 
   function activate(id, { scroll = false } = {}) {
     activeId = id;
     paintHighlights();
-    for (const card of rail.querySelectorAll('.comment-card[data-id]')) {
+    for (const card of document.querySelectorAll('.comment-card[data-id]')) {
       card.classList.toggle('is-active', card.dataset.id === id);
     }
     const t = targets.get(id);
@@ -307,15 +390,12 @@ export function initComments(deps) {
   async function create(body) {
     const res = await api(base(), { method: 'POST', body: JSON.stringify(body) });
     if (res.status === 409) {
-      // The source we anchored against is stale, so reloading only the comments
-      // would leave the same stale text on screen and 409 again. Reload the
-      // whole note (which also reloads comments and drops review mode).
+      // The source we anchored against is stale; reload the whole note (which
+      // also reloads comments and drops review mode), then re-enter review.
       const wasReviewing = reviewing;
-      closeComposer();
+      closeFloating();
       await deps.reloadNote();
       if (wasReviewing) setReviewMode(true);
-      // The composer and its inline error slot went with the re-render, so say
-      // it at app level (as app.js does for a failed save).
       window.alert('The note changed and was reloaded. Select the text again.');
       return;
     }
@@ -345,8 +425,6 @@ export function initComments(deps) {
   async function load() {
     data = { round: 1, items: [] };
     activeId = null;
-    // Hide it up front: the await below is long enough for the previous note's
-    // button to stay on screen while a different note is already rendered.
     copyBtn.hidden = true;
     const current = note();
     if (current && current.owned) {
@@ -358,105 +436,225 @@ export function initComments(deps) {
     repaint();
   }
 
-  // ── Composer popover ──────────────────────────────────────────────────────
+  function copyFeedback(flashOn) {
+    const current = note();
+    if (!current) return;
+    const text = formatFeedback(data, deps.getSource(), {
+      title: deps.getTitle(),
+      rev: current.currentRev,
+    });
+    navigator.clipboard
+      .writeText(text)
+      .then(() => deps.flashCopied(flashOn))
+      .catch(() => {});
+  }
 
-  function closeComposer() {
+  // ── Floating UI: popover (≥768) and bottom sheet (<768) ───────────────────
+
+  function syncInset() {
+    const vv = window.visualViewport;
+    const inset = vv
+      ? keyboardInset({
+          innerHeight: window.innerHeight,
+          vvHeight: vv.height,
+          vvOffsetTop: vv.offsetTop,
+        })
+      : 0;
+    document.documentElement.style.setProperty('--kb-inset', `${inset}px`);
+  }
+
+  function openSheet(kind, title, children) {
+    closeFloating();
+    const close = el('button', { type: 'button', className: 'text-btn', textContent: 'Close' });
+    close.addEventListener('click', () => closeFloating());
+    sheetBody = el('div', { className: 'review-sheet-body' }, children);
+    sheet = el('div', { className: 'review-sheet' }, [
+      el('div', { className: 'review-sheet-head' }, [el('span', { textContent: title }), close]),
+      sheetBody,
+    ]);
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', title);
+    sheetKind = kind;
+    document.body.append(sheet);
+    syncInset();
+  }
+
+  function openPopover(children, rect) {
+    popover = el('div', { className: 'comment-popover' }, children);
+    scroller.append(popover);
+    const host = scroller.getBoundingClientRect();
+    const at = rect || (rail.hidden ? listBtn : rail).getBoundingClientRect();
+    const left = Math.min(Math.max(at.left - host.left, 8), host.width - 316);
+    popover.style.left = `${left}px`;
+    popover.style.top = `${at.bottom - host.top + 8}px`;
+  }
+
+  /** Close the popover and any sheet; `keepList` leaves an open list sheet up. */
+  function closeFloating({ keepList = false } = {}) {
     if (popover) popover.remove();
     popover = null;
+    if (sheet && !(keepList && sheetKind === 'list')) {
+      sheet.remove();
+      sheet = null;
+      sheetKind = null;
+      sheetBody = null;
+    }
+    composing = false;
   }
 
   /** opts: { anchor, rect } for new | { existing } to edit | { general } for the doc note. */
   function openComposer(opts) {
-    closeComposer();
+    closeFloating();
+    hidePill();
     const existing = opts.existing || opts.general || null;
     const isGeneral = 'general' in opts;
     const composer = buildComposer({
       existing,
       isGeneral,
       anchor: opts.anchor || null,
-      onCancel: closeComposer,
+      onCancel: () => closeFloating(),
       onSubmit: async ({ body, tag, tagLocked }) => {
         if (existing) await patch(existing.id, tagLocked ? body : { ...body, tag });
         else await create({ ...body, tag, ...(isGeneral ? {} : { anchor: opts.anchor }) });
-        closeComposer();
+        closeFloating();
         window.getSelection().removeAllRanges();
       },
     });
-    popover = el('div', { className: 'comment-popover' }, [composer.node]);
-    scroller.append(popover);
-    const host = scroller.getBoundingClientRect();
-    const rect = opts.rect || rail.getBoundingClientRect();
-    const left = Math.min(Math.max(rect.left - host.left, 8), host.width - 316);
-    popover.style.left = `${left}px`;
-    popover.style.top = `${rect.bottom - host.top + 8}px`;
+    if (layout() === 'sheet') {
+      const target = opts.anchor || (existing && existing.anchor) || null;
+      const quoted = target
+        ? [
+            el('p', {
+              className: 'review-sheet-quote',
+              textContent: target.block ? `[${target.block.label}]` : target.quote,
+            }),
+          ]
+        : [];
+      openSheet('composer', isGeneral ? 'General note' : 'Comment', [...quoted, composer.node]);
+    } else {
+      openPopover([composer.node], opts.rect);
+    }
+    composing = true;
     composer.focus();
   }
 
-  // ── Selection + gutter ────────────────────────────────────────────────────
+  /** Tap on a highlight where there is no rail: show that one comment. */
+  function openItem(item, rect) {
+    closeFloating();
+    activate(item.id);
+    const card = cardFor(item, false, true);
+    if (layout() === 'sheet') openSheet('item', `${item.id} · ${item.tag}`, [card]);
+    else openPopover([card], rect);
+  }
+
+  // ── Selection, pill, gutter ───────────────────────────────────────────────
 
   function closestBlock(node) {
     const e = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
     return e ? e.closest('[data-line]') : null;
   }
 
-  function onSelectionEnd(e) {
-    if (!reviewing || (popover && popover.contains(e.target))) return;
+  /** The current selection as { anchor, rect }, or null when it is not commentable. */
+  function captureSelection() {
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
     const range = sel.getRangeAt(0);
-    if (!root.contains(range.commonAncestorContainer)) return;
+    if (!root.contains(range.commonAncestorContainer)) return null;
     const first = closestBlock(range.startContainer);
     const last = closestBlock(range.endContainer);
-    if (!first || !last) return;
+    if (!first || !last) return null;
     const spanned = [
       Math.min(parseLines(first)[0], parseLines(last)[0]),
       Math.max(parseLines(first)[1], parseLines(last)[1]),
     ];
-    // Count the selected occurrence in exactly the scopes the highlight will be
-    // searched in later, so capture and repaint agree on which one it is.
     const scopes = blockScopes(root, spanned);
     const lines = unionLines(scopes) || spanned;
     const text = sel.toString();
     const nth = occurrenceAt(scopes, text, range.startContainer, range.startOffset);
     const anchor = captureAnchor(deps.getSource(), lines, text, nth);
-    if (!anchor.quote) return;
-    openComposer({ anchor, rect: range.getBoundingClientRect() });
+    return anchor.quote ? { anchor, rect: range.getBoundingClientRect() } : null;
+  }
+
+  function showPill(label, capture, block = null) {
+    pending = capture;
+    pendingBlock = block;
+    pill.textContent = label;
+    pill.hidden = false;
+    paintHighlights();
+  }
+
+  function hidePill() {
+    pending = null;
+    const hadBlock = pendingBlock;
+    pendingBlock = null;
+    if (pill) pill.hidden = true;
+    if (hadBlock) paintHighlights();
+  }
+
+  function onSelectionChange() {
+    clearTimeout(selectionTimer);
+    // Handles are still being dragged while this fires; wait for them to settle.
+    selectionTimer = setTimeout(() => {
+      if (!active() || !usesPill() || composing) return;
+      const capture = captureSelection();
+      if (capture) showPill('Comment', capture);
+      else if (!pendingBlock) hidePill();
+    }, 200);
+  }
+
+  function onSelectionEnd(e) {
+    if (!active() || usesPill() || isChrome(e.target)) return;
+    const capture = captureSelection();
+    if (capture) openComposer(capture);
+  }
+
+  function isChrome(target) {
+    return [rail, drawer, listBtn, gutterBtn, popover, sheet, bar, pill].some(
+      (node) => node && node.contains(target)
+    );
   }
 
   function onClick(e) {
-    if (!reviewing) return;
-    // The click that opens the composer (gutter "+" button, or the rail's
-    // "General note" card) bubbles up to this document-level handler with a
-    // collapsed selection; without this guard it would immediately close the
-    // popover it just opened.
-    if (rail.contains(e.target) || (gutterBtn && gutterBtn.contains(e.target))) return;
-    if (popover && !popover.contains(e.target) && window.getSelection().isCollapsed)
-      closeComposer();
-    if (!root.contains(e.target) || !window.getSelection().isCollapsed) return;
+    if (!active() || isChrome(e.target)) return;
+    const collapsed = window.getSelection().isCollapsed;
+    if (popover && collapsed) closeFloating();
+    if (!collapsed) return;
+    if (!root.contains(e.target)) return hidePill();
     for (const item of data.items) {
       const t = targets.get(item.id);
-      if (!t || !t.range) continue;
-      const hit = [...t.range.getClientRects()].some(
+      if (!t || !t.range || item.status !== 'open') continue;
+      const rects = [...t.range.getClientRects()];
+      const hit = rects.some(
         (r) =>
           e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
       );
-      if (hit) {
+      if (!hit) continue;
+      hidePill();
+      if (layout() === 'rail') {
         activate(item.id);
         rail.querySelector(`[data-id="${item.id}"]`)?.scrollIntoView({ block: 'nearest' });
-        return;
+      } else {
+        openItem(item, rects[rects.length - 1]);
       }
+      return;
     }
+    // Touch has no hover, so a plain tap on a block offers the block comment.
+    if (!usesPill()) return;
+    const block = outermostBlock(root, e.target);
+    if (!block || block === pendingBlock) return hidePill();
+    const { kind, label } = describeBlock(block);
+    showPill(
+      'Comment on block',
+      { anchor: blockAnchor(parseLines(block), kind, label), rect: block.getBoundingClientRect() },
+      block
+    );
   }
 
   function onHover(e) {
-    if (!reviewing || popover) return;
+    if (!active() || popover || usesPill() || layout() !== 'rail') return;
     if (gutterBtn && gutterBtn.contains(e.target)) return;
-    let block = e.target.closest ? e.target.closest('[data-line]') : null;
-    // Comment on the outermost stamped block (a whole list or quote, not one item).
-    while (block && block.parentElement.closest('[data-line]')) {
-      block = block.parentElement.closest('[data-line]');
-    }
-    if (!block || !root.contains(block)) return;
+    const block = outermostBlock(root, e.target);
+    if (!block) return;
     if (!gutterBtn) {
       gutterBtn = el('button', {
         className: 'comment-gutter-btn',
@@ -466,18 +664,18 @@ export function initComments(deps) {
       });
       gutterBtn.setAttribute('aria-label', 'Comment on this block');
       gutterBtn.addEventListener('click', () => {
-        const target = gutterBtn.block;
-        const { kind, label } = describeBlock(target);
+        if (!gutterBlock || !gutterBlock.isConnected) return;
+        const { kind, label } = describeBlock(gutterBlock);
         openComposer({
-          anchor: blockAnchor(parseLines(target), kind, label),
-          rect: target.getBoundingClientRect(),
+          anchor: blockAnchor(parseLines(gutterBlock), kind, label),
+          rect: gutterBlock.getBoundingClientRect(),
         });
       });
       scroller.append(gutterBtn);
     }
     const host = scroller.getBoundingClientRect();
     const rect = block.getBoundingClientRect();
-    gutterBtn.block = block;
+    gutterBlock = block;
     gutterBtn.hidden = false;
     gutterBtn.style.top = `${rect.top - host.top}px`;
     gutterBtn.style.left = `${Math.max(rect.left - host.left - 30, 0)}px`;
@@ -492,7 +690,9 @@ export function initComments(deps) {
     reviewBtn.setAttribute('aria-pressed', String(reviewing));
     scroller.classList.toggle('reviewing', reviewing);
     if (!reviewing) {
-      closeComposer();
+      closeFloating();
+      hidePill();
+      setDrawer(false);
       if (gutterBtn) gutterBtn.hidden = true;
       activeId = null;
     }
@@ -500,27 +700,45 @@ export function initComments(deps) {
     deps.onModeChange();
   }
 
+  function onResize() {
+    const next = layout();
+    if (next !== currentLayout) {
+      // Rotation or a window resize across a breakpoint: stay in review mode,
+      // drop floating UI that belongs to the old layout.
+      currentLayout = next;
+      closeFloating();
+      hidePill();
+      setDrawer(false);
+      if (gutterBtn) gutterBtn.hidden = true;
+    }
+    if (reviewing) repaint();
+  }
+
+  pill = el('button', { type: 'button', className: 'comment-pill', hidden: true });
+  // Keep the text selection alive through the tap; the anchor was captured
+  // when the selection settled, so nothing depends on it surviving the click.
+  pill.addEventListener('pointerdown', (e) => e.preventDefault());
+  pill.addEventListener('click', () => {
+    const capture = pending;
+    if (capture) openComposer(capture);
+  });
+  document.body.append(pill);
+
   reviewBtn.addEventListener('click', () => setReviewMode(!reviewing));
-  copyBtn.addEventListener('click', () => {
-    const current = note();
-    if (!current) return;
-    const text = formatFeedback(data, deps.getSource(), {
-      title: deps.getTitle(),
-      rev: current.currentRev,
-    });
-    navigator.clipboard
-      .writeText(text)
-      .then(() => deps.flashCopied(copyBtn))
-      .catch(() => {});
+  copyBtn.addEventListener('click', () => copyFeedback(copyBtn));
+  listBtn.addEventListener('click', () => {
+    setDrawer(drawer.hidden);
+    renderList();
   });
   document.addEventListener('mouseup', onSelectionEnd);
+  document.addEventListener('selectionchange', onSelectionChange);
   document.addEventListener('click', onClick);
   root.addEventListener('mouseover', onHover);
-  window.addEventListener('resize', () => reviewing && renderRail());
-  desktop.addEventListener('change', (e) => {
-    if (!e.matches) setReviewMode(false);
-    repaint();
-  });
+  window.addEventListener('resize', onResize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', syncInset);
+    window.visualViewport.addEventListener('scroll', syncInset);
+  }
 
   return {
     load,

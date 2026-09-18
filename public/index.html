@@ -215,8 +215,17 @@
                   <button id="copy-md-btn" class="text-btn" data-secondary hidden>
                     Copy Markdown
                   </button>
-                  <button id="review-btn" class="text-btn" aria-pressed="false" hidden>
+                  <button
+                    id="review-btn"
+                    class="text-btn"
+                    aria-pressed="false"
+                    data-secondary
+                    hidden
+                  >
                     Review
+                  </button>
+                  <button id="comments-list-btn" class="text-btn" aria-expanded="false" hidden>
+                    Comments
                   </button>
                   <button id="copy-feedback-btn" class="text-btn" data-secondary hidden>
                     Copy feedback
@@ -260,6 +269,14 @@
                 </div>
                 <ul id="revisions-list" class="revisions-list"></ul>
                 <pre id="rev-diff" class="rev-diff"></pre>
+              </aside>
+              <aside
+                id="comments-drawer"
+                class="revisions-drawer comments-drawer"
+                aria-label="Review comments"
+                hidden
+              >
+                <div class="comments-list"></div>
               </aside>
             </div>
             <div class="viewer-scroll">

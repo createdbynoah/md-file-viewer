@@ -98,6 +98,8 @@ const editorSaveBtn = document.getElementById('editor-save-btn');
 const reviewBtn = document.getElementById('review-btn');
 const copyFeedbackBtn = document.getElementById('copy-feedback-btn');
 const commentsRail = document.getElementById('comments-rail');
+const commentsListBtn = document.getElementById('comments-list-btn');
+const commentsDrawer = document.getElementById('comments-drawer');
 
 let foldersData = [];
 let currentFileId = null;
@@ -353,6 +355,8 @@ const comments = initComments({
   root: renderedOutput,
   scroller: document.querySelector('.viewer-scroll'),
   rail: commentsRail,
+  drawer: commentsDrawer,
+  listBtn: commentsListBtn,
   reviewBtn,
   copyBtn: copyFeedbackBtn,
   api,
