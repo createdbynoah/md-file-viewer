@@ -1,0 +1,85 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, vi } from 'vitest';
+import { buildCard, buildGeneralCard, cardQuote } from './comments-cards.js';
+
+const item = (over = {}) => ({
+  id: 'c1',
+  tag: 'fix',
+  note: '<img src=x onerror=alert(1)>',
+  status: 'open',
+  anchor: { quote: 'soon', approx: false, prefix: '', suffix: '', lines: [3, 3] },
+  ...over,
+});
+const handlers = () => ({
+  onActivate: vi.fn(),
+  onEdit: vi.fn(),
+  onToggle: vi.fn(),
+  onDelete: vi.fn(),
+});
+
+describe('buildCard', () => {
+  it('renders user text as text, never as markup', () => {
+    const card = buildCard(item(), { orphaned: false, active: false, ...handlers() });
+    expect(card.querySelector('img')).toBeNull();
+    expect(card.querySelector('.comment-card-note').textContent).toBe(
+      '<img src=x onerror=alert(1)>'
+    );
+    expect(card.dataset.id).toBe('c1');
+    expect(card.dataset.tag).toBe('fix');
+  });
+  it('head shows id, tag, quote, and the orphan marker', () => {
+    const card = buildCard(item(), { orphaned: true, active: false, ...handlers() });
+    expect(card.querySelector('.comment-card-head').textContent).toBe(
+      'c1 · fix · anchor not found · "soon"'
+    );
+    const block = item({ anchor: { ...item().anchor, block: { kind: 'table', label: 'table' } } });
+    expect(cardQuote(block)).toBe('[table]');
+  });
+  it('shows the replacement, and state classes', () => {
+    const card = buildCard(item({ replace: 'on 1 March', status: 'addressed' }), {
+      orphaned: false,
+      active: true,
+      ...handlers(),
+    });
+    expect(card.querySelectorAll('.comment-card-note')[0].textContent).toBe('→ on 1 March');
+    expect(card.classList.contains('is-active')).toBe(true);
+    expect(card.classList.contains('is-addressed')).toBe(true);
+  });
+  it('action buttons call their handler without activating the card', () => {
+    const h = handlers();
+    const card = buildCard(item(), { orphaned: false, active: true, ...h });
+    const [edit, toggle, del] = card.querySelectorAll('.comment-card-actions button');
+    expect(toggle.textContent).toBe('Resolve');
+    edit.click();
+    toggle.click();
+    del.click();
+    expect(h.onEdit).toHaveBeenCalledTimes(1);
+    expect(h.onToggle).toHaveBeenCalledTimes(1);
+    expect(h.onDelete).toHaveBeenCalledTimes(1);
+    expect(h.onActivate).not.toHaveBeenCalled();
+    card.click();
+    expect(h.onActivate).toHaveBeenCalledTimes(1);
+  });
+  it('an addressed card offers Reopen', () => {
+    const card = buildCard(item({ status: 'addressed' }), {
+      orphaned: false,
+      active: true,
+      ...handlers(),
+    });
+    expect(card.querySelectorAll('.comment-card-actions button')[1].textContent).toBe('Reopen');
+  });
+});
+
+describe('buildGeneralCard', () => {
+  it('shows the note or an invitation, and opens on click', () => {
+    const onOpen = vi.fn();
+    const empty = buildGeneralCard(undefined, onOpen);
+    expect(empty.querySelector('.comment-card-note').textContent).toBe(
+      'Add a note about the whole document'
+    );
+    empty.click();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    const filled = buildGeneralCard({ id: 'c4', tag: 'general', note: 'Too salesy' }, onOpen);
+    expect(filled.querySelector('.comment-card-note').textContent).toBe('Too salesy');
+  });
+});

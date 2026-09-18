@@ -4,9 +4,10 @@
 // "Copy feedback". All anchoring maths lives in anchor.js; this file is DOM glue.
 import { captureAnchor, blockAnchor, locate, nthInLines, wsRegex } from './anchor.js';
 import { formatFeedback } from './feedback-format.js';
+import { el } from './el.js';
+import { buildCard, buildGeneralCard } from './comments-cards.js';
+import { buildComposer } from './comments-composer.js';
 
-const TAGS = ['fix', 'cut', 'q', 'keep'];
-const NOTE_OPTIONAL = new Set(['cut', 'keep']);
 const HIGHLIGHT_FOR = {
   fix: 'review-fix',
   q: 'review-fix',
@@ -19,12 +20,6 @@ const canHighlight = typeof CSS !== 'undefined' && 'highlights' in CSS;
 // buttons that are `hidden`, so keeping Copy feedback hidden below 1024px is
 // what keeps it out of that menu.
 const desktop = window.matchMedia('(min-width: 1024px)');
-
-function el(tag, props = {}, children = []) {
-  const node = Object.assign(document.createElement(tag), props);
-  for (const child of children) node.append(child);
-  return node;
-}
 
 function parseLines(node) {
   const [s, e] = node.dataset.line.split(',').map(Number);
@@ -257,14 +252,7 @@ export function initComments(deps) {
     if (!show) return;
 
     const general = data.items.find((i) => i.tag === 'general');
-    const generalCard = el('div', { className: 'comment-card comments-general' }, [
-      el('div', { className: 'comment-card-head', textContent: 'General note' }),
-      el('div', {
-        className: 'comment-card-note',
-        textContent: general ? general.note : 'Add a note about the whole document',
-      }),
-    ]);
-    generalCard.addEventListener('click', () => openComposer({ general }));
+    const generalCard = buildGeneralCard(general, () => openComposer({ general }));
     rail.append(generalCard);
 
     const placed = data.items
@@ -275,7 +263,7 @@ export function initComments(deps) {
       .sort((a, b) => (a.top ?? Infinity) - (b.top ?? Infinity));
     let floor = generalCard.offsetTop + generalCard.offsetHeight + CARD_GAP;
     for (const { item, top, orphaned } of placed) {
-      const card = buildCard(item, orphaned);
+      const card = cardFor(item, orphaned);
       rail.append(card);
       const y = Math.max(top ?? floor, floor);
       card.style.top = `${y}px`;
@@ -284,46 +272,16 @@ export function initComments(deps) {
     rail.style.height = `${floor}px`;
   }
 
-  function buildCard(item, orphaned) {
-    const quote = item.anchor.block ? `[${item.anchor.block.label}]` : `"${item.anchor.quote}"`;
-    const card = el('div', { className: 'comment-card' }, [
-      el('div', {
-        className: 'comment-card-head',
-        textContent: `${item.id} · ${item.tag}${orphaned ? ' · anchor not found' : ''} · ${quote}`,
-      }),
-    ]);
-    card.dataset.id = item.id;
-    card.dataset.tag = item.tag;
-    card.classList.toggle('is-active', item.id === activeId);
-    card.classList.toggle('is-addressed', item.status === 'addressed');
-    if (item.replace) {
-      card.append(el('div', { className: 'comment-card-note', textContent: `→ ${item.replace}` }));
-    }
-    if (item.note)
-      card.append(el('div', { className: 'comment-card-note', textContent: item.note }));
-
-    const action = (label, fn, danger) => {
-      const b = el('button', {
-        className: `text-btn${danger ? ' danger' : ''}`,
-        textContent: label,
-      });
-      b.addEventListener('click', (e) => {
-        e.stopPropagation();
-        fn();
-      });
-      return b;
-    };
-    card.append(
-      el('div', { className: 'comment-card-actions' }, [
-        action('Edit', () => openComposer({ existing: item })),
-        action(item.status === 'open' ? 'Resolve' : 'Reopen', () =>
-          patch(item.id, { status: item.status === 'open' ? 'addressed' : 'open' })
-        ),
-        action('Delete', () => remove(item.id), true),
-      ])
-    );
-    card.addEventListener('click', () => activate(item.id, { scroll: true }));
-    return card;
+  function cardFor(item, orphaned, active = item.id === activeId) {
+    return buildCard(item, {
+      orphaned,
+      active,
+      onActivate: () => activate(item.id, { scroll: true }),
+      onEdit: () => openComposer({ existing: item }),
+      onToggle: () =>
+        patch(item.id, { status: item.status === 'open' ? 'addressed' : 'open' }).catch(() => {}),
+      onDelete: () => remove(item.id),
+    });
   }
 
   function repaint() {
@@ -412,87 +370,26 @@ export function initComments(deps) {
     closeComposer();
     const existing = opts.existing || opts.general || null;
     const isGeneral = 'general' in opts;
-    let tag = existing ? existing.tag : isGeneral ? 'general' : 'fix';
-
-    const tagRow = el('div', { className: 'comment-tags' });
-    const tagButtons = TAGS.map((t, i) => {
-      const b = el('button', { type: 'button', textContent: `${i + 1} ${t}` });
-      b.addEventListener('click', () => setTag(t));
-      tagRow.append(b);
-      return b;
-    });
-    const noteInput = el('textarea', { rows: 2, placeholder: 'Add a note' });
-    const replaceInput = el('input', {
-      type: 'text',
-      placeholder: 'Replace with (optional, exact)',
-    });
-    const error = el('span', { className: 'comment-error' });
-    const foot = el('div', { className: 'comment-popover-foot' }, [
-      el('span', { textContent: '⌥1–4 tag · ⌘↵ save · esc cancel' }),
-      error,
-    ]);
-    if (existing) {
-      noteInput.value = existing.note || '';
-      replaceInput.value = existing.replace || '';
-    }
-    // keep/general ids are fixed (see PATCH rules), so their tag cannot change.
-    const tagLocked = isGeneral || (existing && existing.tag === 'keep');
-    const hasQuote = !isGeneral && !(opts.anchor || existing.anchor).block;
-
-    function setTag(next) {
-      if (tagLocked || (existing && next === 'keep')) return;
-      tag = next;
-      tagButtons.forEach((b, i) => b.setAttribute('aria-pressed', String(TAGS[i] === tag)));
-      replaceInput.hidden = !(hasQuote && tag === 'fix');
-    }
-
-    popover = el('div', { className: 'comment-popover' }, [
-      ...(tagLocked ? [] : [tagRow]),
-      noteInput,
-      replaceInput,
-      foot,
-    ]);
-    setTag(tag);
-    if (tagLocked) replaceInput.hidden = true;
-
-    async function save() {
-      const body = {
-        note: noteInput.value,
-        replace: replaceInput.hidden ? '' : replaceInput.value,
-      };
-      if (!NOTE_OPTIONAL.has(tag) && !body.note.trim() && !body.replace.trim()) {
-        error.textContent = 'Add a note first';
-        return;
-      }
-      try {
+    const composer = buildComposer({
+      existing,
+      isGeneral,
+      anchor: opts.anchor || null,
+      onCancel: closeComposer,
+      onSubmit: async ({ body, tag, tagLocked }) => {
         if (existing) await patch(existing.id, tagLocked ? body : { ...body, tag });
         else await create({ ...body, tag, ...(isGeneral ? {} : { anchor: opts.anchor }) });
         closeComposer();
         window.getSelection().removeAllRanges();
-      } catch (e) {
-        error.textContent = e.message;
-      }
-    }
-
-    popover.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeComposer();
-      else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
-      // Alt/Option+1–4 only — bare digits must always type into the note.
-      // macOS Option+digit remaps e.key (e.g. Option+2 -> "™"), so match on
-      // the physical key via e.code instead.
-      else if (!tagLocked && e.altKey && /^Digit[1-4]$/.test(e.code)) {
-        e.preventDefault();
-        setTag(TAGS[Number(e.code.slice(-1)) - 1]);
-      }
+      },
     });
-
+    popover = el('div', { className: 'comment-popover' }, [composer.node]);
     scroller.append(popover);
     const host = scroller.getBoundingClientRect();
     const rect = opts.rect || rail.getBoundingClientRect();
     const left = Math.min(Math.max(rect.left - host.left, 8), host.width - 316);
     popover.style.left = `${left}px`;
     popover.style.top = `${rect.bottom - host.top + 8}px`;
-    noteInput.focus();
+    composer.focus();
   }
 
   // ── Selection + gutter ────────────────────────────────────────────────────

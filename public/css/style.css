@@ -1498,13 +1498,21 @@ body.read-only #back-btn {
 .comment-popover input {
   margin-top: 6px;
 }
-.comment-popover-foot {
+.comment-composer-foot {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-top: 6px;
   font-size: 0.6875rem;
   color: var(--text-tertiary);
+}
+.comment-composer-foot .comment-hint {
+  margin-right: auto;
+}
+.comment-composer-foot .comment-save {
+  padding: 4px 12px;
+  font-size: 0.8125rem;
 }
 .comment-error {
   color: var(--danger);
