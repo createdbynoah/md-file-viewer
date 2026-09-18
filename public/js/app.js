@@ -360,6 +360,9 @@ const comments = initComments({
   getSource: () => currentRawMarkdown,
   getTitle: () => currentFilename || 'Untitled',
   flashCopied,
+  // Review mode is unavailable while editing or viewing a read-only revision
+  // snapshot (see applyOwnerControls and the revViewBtn/closeRevisions wiring).
+  canReview: () => !editing && !snapshotShown,
   // Review mode pins the header (see headerLocked).
   onModeChange: () => showHeader(),
 });
@@ -1021,7 +1024,7 @@ function applyOwnerControls() {
   folderBtn.hidden = !owned;
   visibilityBtn.hidden = !owned;
   editBtn.hidden = !owned || editing;
-  reviewBtn.hidden = !owned || editing;
+  reviewBtn.hidden = !owned || editing || snapshotShown;
   if (!owned) copyFeedbackBtn.hidden = true;
   historyBtn.hidden = !currentNote;
   copyLinkBtn.hidden = !(currentNote && currentNote.visibility === 'link');
@@ -1323,6 +1326,9 @@ function closeRevisions() {
       );
       restoreScroll(currentNote.id);
     }
+    // Review mode was unavailable while the snapshot was shown; bring the
+    // Review button back now that the current note is restored.
+    applyOwnerControls();
   }
 }
 
@@ -1371,6 +1377,10 @@ revViewBtn.addEventListener('click', async () => {
     wrapTables();
     viewerTitle.textContent = `${currentFilename} — revision #${n}`;
     snapshotShown = true;
+    // Review mode (and its highlights/rail) must not stay up against a
+    // read-only snapshot of stale-relative-to-source content.
+    comments.setReviewMode(false);
+    applyOwnerControls();
   } catch {
     revDiff.textContent = 'Could not load revisions.';
   }

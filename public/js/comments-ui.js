@@ -15,6 +15,10 @@ const HIGHLIGHT_FOR = {
 };
 const CARD_GAP = 8;
 const canHighlight = typeof CSS !== 'undefined' && 'highlights' in CSS;
+// A1 is desktop-only (see style.css); Copy feedback must not leak into the
+// mobile ••• menu, which lists every [data-secondary] button regardless of
+// its `hidden` attribute state.
+const desktop = window.matchMedia('(min-width: 1024px)');
 
 function el(tag, props = {}, children = []) {
   const node = Object.assign(document.createElement(tag), props);
@@ -137,25 +141,30 @@ export function initComments(deps) {
   }
 
   function paintHighlights() {
-    if (!canHighlight) return;
-    for (const name of [...new Set(Object.values(HIGHLIGHT_FOR)), 'review-active']) {
-      CSS.highlights.delete(name);
+    // Cleanup always runs, even without the Highlight API or while review
+    // mode is unavailable (e.g. a revision snapshot is on screen).
+    if (canHighlight) {
+      for (const name of [...new Set(Object.values(HIGHLIGHT_FOR)), 'review-active']) {
+        CSS.highlights.delete(name);
+      }
     }
     for (const node of root.querySelectorAll('.review-block'))
       node.classList.remove('review-block');
-    if (!reviewing) return;
+    if (!reviewing || !deps.canReview()) return;
     const groups = {};
     for (const item of data.items) {
       const t = targets.get(item.id);
       if (!t || item.status !== 'open') continue;
       if (t.range) (groups[HIGHLIGHT_FOR[item.tag]] ||= []).push(t.range);
       if (item.id === activeId) {
-        if (t.range) CSS.highlights.set('review-active', new Highlight(t.range));
+        if (canHighlight && t.range) CSS.highlights.set('review-active', new Highlight(t.range));
         else if (t.block) t.block.classList.add('review-block');
       }
     }
-    for (const [name, ranges] of Object.entries(groups)) {
-      CSS.highlights.set(name, new Highlight(...ranges));
+    if (canHighlight) {
+      for (const [name, ranges] of Object.entries(groups)) {
+        CSS.highlights.set(name, new Highlight(...ranges));
+      }
     }
   }
 
@@ -169,8 +178,9 @@ export function initComments(deps) {
 
   function renderRail() {
     rail.replaceChildren();
-    rail.hidden = !reviewing;
-    if (!reviewing) return;
+    const show = reviewing && deps.canReview();
+    rail.hidden = !show;
+    if (!show) return;
 
     const general = data.items.find((i) => i.tag === 'general');
     const generalCard = el('div', { className: 'comment-card comments-general' }, [
@@ -244,7 +254,7 @@ export function initComments(deps) {
     resolveTargets();
     paintHighlights();
     renderRail();
-    copyBtn.hidden = !(note() && note().owned && data.items.length);
+    copyBtn.hidden = !(note() && note().owned && data.items.length && desktop.matches);
   }
 
   function activate(id, { scroll = false } = {}) {
@@ -266,7 +276,7 @@ export function initComments(deps) {
       await load();
       throw new Error('The note changed. Select the text again.');
     }
-    if (!res.ok) throw new Error((await res.json()).error || 'Could not save');
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not save');
     const { item } = await res.json();
     data.items.push(item);
     activeId = item.id;
@@ -275,7 +285,7 @@ export function initComments(deps) {
 
   async function patch(id, body) {
     const res = await api(`${base()}/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
-    if (!res.ok) throw new Error((await res.json()).error || 'Could not save');
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not save');
     const { item } = await res.json();
     data.items = data.items.map((i) => (i.id === id ? item : i));
     repaint();
@@ -330,7 +340,7 @@ export function initComments(deps) {
     });
     const error = el('span', { className: 'comment-error' });
     const foot = el('div', { className: 'comment-popover-foot' }, [
-      el('span', { textContent: '⌘↵ save · esc cancel' }),
+      el('span', { textContent: '⌥1–4 tag · ⌘↵ save · esc cancel' }),
       error,
     ]);
     if (existing) {
@@ -379,9 +389,12 @@ export function initComments(deps) {
     popover.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeComposer();
       else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
-      else if (!tagLocked && /^[1-4]$/.test(e.key) && (e.altKey || !noteInput.value)) {
+      // Alt/Option+1–4 only — bare digits must always type into the note.
+      // macOS Option+digit remaps e.key (e.g. Option+2 -> "™"), so match on
+      // the physical key via e.code instead.
+      else if (!tagLocked && e.altKey && /^Digit[1-4]$/.test(e.code)) {
         e.preventDefault();
-        setTag(TAGS[Number(e.key) - 1]);
+        setTag(TAGS[Number(e.code.slice(-1)) - 1]);
       }
     });
 
@@ -482,7 +495,7 @@ export function initComments(deps) {
   // ── Mode + public API ─────────────────────────────────────────────────────
 
   function setReviewMode(on) {
-    const next = Boolean(on && note() && note().owned);
+    const next = Boolean(on && note() && note().owned && deps.canReview());
     if (next === reviewing) return;
     reviewing = next;
     reviewBtn.setAttribute('aria-pressed', String(reviewing));
@@ -504,13 +517,19 @@ export function initComments(deps) {
       title: deps.getTitle(),
       rev: current.currentRev,
     });
-    navigator.clipboard.writeText(text);
-    deps.flashCopied(copyBtn);
+    navigator.clipboard
+      .writeText(text)
+      .then(() => deps.flashCopied(copyBtn))
+      .catch(() => {});
   });
   document.addEventListener('mouseup', onSelectionEnd);
   document.addEventListener('click', onClick);
   root.addEventListener('mouseover', onHover);
   window.addEventListener('resize', () => reviewing && renderRail());
+  desktop.addEventListener('change', (e) => {
+    if (!e.matches) setReviewMode(false);
+    repaint();
+  });
 
   return {
     load,
