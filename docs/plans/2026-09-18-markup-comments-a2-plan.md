@@ -1704,3 +1704,27 @@ git commit -m "docs(comments): review mode layouts and touch input"
 - A1 desktop behavior is unchanged apart from the composer's Save/Cancel buttons.
 - PR opened per the Branching note (do not deploy; CI deploys on merge).
 - A manual pass on a real iPhone and iPad is called out in the PR description as still required: native selection handles, the callout menu not covering the pill, and the keyboard inset cannot be fully proven in emulation.
+
+## Carry-over to A3
+
+Found by A2's final review and deliberately deferred. Do these first in the A3 plan.
+
+**Bug (Important) — composer stranded when the layout kind changes mid-compose.** `onResize` keeps an open composer across a breakpoint so the draft survives, but leaves it in its old presentation:
+
+- drawer → sheet (landscape phone or touch tablet rotated to portrait while composing in a **popover**): the popover's `left` was computed for the wide layout and lands outside `.viewer-scroll` (`overflow-x: clip`), so the composer and draft are invisible; `composing` stays true and the sheet-layout guard in `onNoteClick` swallows taps in the note. Exits today: Done, Esc, or a new selection → pill.
+- sheet → drawer: the surviving sheet composer is no longer protected by the `composing && layout() === 'sheet'` guard, so a tap in the note opens an item view and drops the draft.
+
+Fix: on a layout-kind change while composing, re-present the **same composer node** in the new layout (move it popover ↔ sheet, recompute the popover position) and make the guard `composing && sheet` (presentation, not layout). Verify both directions with a typed draft.
+
+**Deferred minors**
+
+- Sidebar open on a phone hides the review bar and pill but not an open sheet.
+- Pill can hide under a slow (>200 ms) press if iOS collapses the selection at touchstart — suppress `hidePill` between pill `pointerdown` and `pointerup`.
+- `showPill` repaints highlights on every settled selection; `resolveTargets` re-queries `[data-line]` per item (build the block table once per repaint — matters at the 500-comment cap on phones).
+- Accessibility: `aria-modal` + focus move/return for sheets, Escape outside the composer and in the drawer, keyboard-operable cards.
+- `(pointer: coarse)` only: touch laptops cannot comment by touch (`any-pointer`). Landscape phones get drawer + popover in ~375px of height — consider sheet when coarse and short.
+- No tests for the controller state machine (`composing`, `closeFloating`, `keepList`, `onResize`, `pending`, the save token); a small happy-dom test of `initComments` would lock down the `showLogin` teardown.
+- ••• menu "Review" item shows no on/off state. `RAIL_MIN_WIDTH` / `DRAWER_MIN_WIDTH` exported but unused. The 400 ms perf-test bound is timing-based (19 ms measured).
+- From A1, still open: CRLF sources leave `\r` in quotes; approx/block anchors' exported `L` numbers do not follow line shifts until triage; typographer `©`/`±`/`™` pairs fall to `approx`; the 409 alert says "reloaded" even if the reload GET failed.
+
+**Real-device checks still owed (A2):** iPhone + iPad pass per the PR description — native selection handles, callout menu vs pill/bar, fast and slow pill press, keyboard inset (incl. emoji/QuickType switch), iOS 26 bar tinting, tap-a-highlight / tap-a-block on WebKit, landscape composer focus-zoom, iPad portrait toolbar.
