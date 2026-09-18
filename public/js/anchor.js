@@ -16,8 +16,28 @@ export function lineAt(source, offset) {
   return line;
 }
 
-function lineCount(source) {
-  return lineAt(source, source.length);
+/**
+ * Offsets at which each 1-based line starts. Built once per `locate` call so
+ * line numbers cost a binary search instead of a scan from 0 (a short quote in
+ * a 2 MB note can have thousands of hits).
+ * @returns {number[]} `starts[n]` is the offset of line `n + 1`
+ */
+function lineStarts(source) {
+  const starts = [0];
+  for (let i = 0; i < source.length; i++) if (source[i] === '\n') starts.push(i + 1);
+  return starts;
+}
+
+/** 1-based line containing `offset`, via binary search over `lineStarts`. */
+function lineOf(starts, offset) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
 }
 
 /** Text of the 1-based inclusive line range and its offset in `source`. */
@@ -28,13 +48,44 @@ export function sliceLines(source, [startLine, endLine]) {
   return { text: all.slice(startLine - 1, endLine).join('\n'), offset };
 }
 
-/** Regex matching `quote` with every whitespace run loosened to \s+. */
+// markdown-it runs with `typographer: true`, so the RENDERED text holds ’ “ ” –
+// — … where the SOURCE holds ' " -- --- ... (and vice versa when we search the
+// rendered DOM for a source quote). Each pair below matches either form from
+// either side, so the match stays exact — this is equivalence, not fuzziness.
+// Longest sequences first: `---` must win over `--`.
+/** @type {[RegExp, string][]} */
+const TYPO = [
+  [/^(?:---|—)/, '(?:---|—)'],
+  [/^(?:--|–)/, '(?:--|–)'],
+  [/^(?:\.\.\.|…)/, '(?:\\.\\.\\.|…)'],
+  [/^['‘’]/, "['‘’]"],
+  [/^["“”]/, '["“”]'],
+];
+
+/** Regex source for one whitespace-free word, tolerant of typographic forms. */
+function wordPattern(word) {
+  let out = '';
+  for (let i = 0; i < word.length;) {
+    const rest = word.slice(i);
+    const hit = TYPO.find(([re]) => re.test(rest));
+    if (hit) {
+      out += hit[1];
+      i += rest.match(hit[0])[0].length;
+    } else {
+      out += word[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Regex matching `quote` with every whitespace run loosened to \s+ and every
+ * typographic character matching its ASCII source form (and vice versa).
+ */
 export function wsRegex(quote) {
-  const escaped = quote
-    .trim()
-    .split(/\s+/)
-    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return new RegExp(escaped.join('\\s+'), 'g');
+  const words = quote.trim().split(/\s+/).map(wordPattern);
+  return new RegExp(words.join('\\s+'), 'g');
 }
 
 export function findAll(source, quote) {
@@ -44,10 +95,17 @@ export function findAll(source, quote) {
   return out;
 }
 
-/** @returns {Anchor} */
-export function captureAnchor(source, lines, selectedText) {
+/**
+ * @param {string} source raw markdown
+ * @param {[number, number]} lines 1-based inclusive range the selection sits in
+ * @param {string} selectedText the rendered text the user selected
+ * @param {number} [nth] 0-based occurrence within `lines` (clamped to the last)
+ * @returns {Anchor}
+ */
+export function captureAnchor(source, lines, selectedText, nth = 0) {
   const slice = sliceLines(source, lines);
-  const m = selectedText.trim() ? wsRegex(selectedText).exec(slice.text) : null;
+  const all = selectedText.trim() ? [...slice.text.matchAll(wsRegex(selectedText))] : [];
+  const m = all.length ? all[Math.min(Math.max(nth, 0), all.length - 1)] : null;
   if (!m) {
     return {
       quote: selectedText.trim().replace(/\s+/g, ' '),
@@ -88,9 +146,10 @@ function contextScore(source, start, end, anchor) {
  * @param {Anchor} anchor
  */
 export function locate(source, anchor) {
+  const starts = lineStarts(source);
   if (anchor.block || anchor.approx) {
     const [s, e] = anchor.lines;
-    if (s < 1 || e < s || e > lineCount(source)) return null;
+    if (s < 1 || e < s || e > starts.length) return null;
     return { start: null, end: null, lines: [s, e] };
   }
   let hits = findAll(source, anchor.quote).map((start) => ({
@@ -104,18 +163,31 @@ export function locate(source, anchor) {
     }));
   }
   if (!hits.length) return null;
-  hits.sort(
-    (a, b) =>
-      contextScore(source, b.start, b.end, anchor) - contextScore(source, a.start, a.end, anchor) ||
-      Math.abs(lineAt(source, a.start) - anchor.lines[0]) -
-        Math.abs(lineAt(source, b.start) - anchor.lines[0])
-  );
-  const { start, end } = hits[0];
-  return { start, end, lines: [lineAt(source, start), lineAt(source, end - 1)] };
+  // Decorate-then-pick in one linear pass: scoring and line numbers used to be
+  // recomputed inside the sort comparator, which is O(n log n) full-source
+  // scans for a common quote in a large note.
+  let best = null;
+  for (const hit of hits) {
+    const score = contextScore(source, hit.start, hit.end, anchor);
+    const dist = Math.abs(lineOf(starts, hit.start) - anchor.lines[0]);
+    if (!best || score > best.score || (score === best.score && dist < best.dist)) {
+      best = { ...hit, score, dist };
+    }
+    // Nothing can beat full context agreement on the remembered line.
+    if (best.score === 4 && best.dist === 0) break;
+  }
+  const { start, end } = best;
+  return { start, end, lines: [lineOf(starts, start), lineOf(starts, end - 1)] };
 }
 
-/** 0-based index of the occurrence at `start` among occurrences in the line slice. */
+/**
+ * 0-based index of the occurrence at `start` among occurrences in the line
+ * slice. Counts whitespace- and typography-tolerantly, exactly like the regex
+ * `rangeForQuote` uses on the rendered text, so both directions agree.
+ */
 export function nthInLines(source, lines, start, quote) {
   const slice = sliceLines(source, lines);
-  return findAll(slice.text, quote).filter((i) => slice.offset + i < start).length;
+  if (!quote.trim()) return 0;
+  return [...slice.text.matchAll(wsRegex(quote))].filter((m) => slice.offset + m.index < start)
+    .length;
 }

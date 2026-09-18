@@ -7,6 +7,7 @@ import {
   blockAnchor,
   locate,
   nthInLines,
+  wsRegex,
 } from './anchor.js';
 
 const SRC = [
@@ -47,6 +48,25 @@ describe('captureAnchor', () => {
     expect(a.quote).toBe('beta ends.\nRollback is');
     expect(a.lines).toEqual([3, 4]);
   });
+  it('captures the nth occurrence inside the slice, with its own context', () => {
+    const second = SRC.lastIndexOf('The beta');
+    const a = captureAnchor(SRC, [6, 6], 'The beta', 1);
+    expect(a.approx).toBe(false);
+    expect(a.quote).toBe('The beta');
+    expect(a.prefix).toBe(SRC.slice(Math.max(0, second - 32), second));
+    expect(a.prefix.endsWith('is small. ')).toBe(true);
+    expect(a.suffix.startsWith(' is closed.')).toBe(true);
+    // the first occurrence is still the default, and nth clamps to the last
+    expect(captureAnchor(SRC, [6, 6], 'The beta').suffix.startsWith(' is small.')).toBe(true);
+    expect(captureAnchor(SRC, [6, 6], 'The beta', 9).prefix).toBe(a.prefix);
+  });
+  it('captures typographic selections exactly from their ASCII source', () => {
+    const src = 'We don\'t "ship" on Fridays -- ever... really.';
+    const a = captureAnchor(src, [1, 1], 'don’t “ship” on Fridays – ever…');
+    expect(a.approx).toBe(false);
+    expect(a.quote).toBe('don\'t "ship" on Fridays -- ever...');
+    expect(src.slice(src.indexOf(a.quote), src.indexOf(a.quote) + a.quote.length)).toBe(a.quote);
+  });
   it('falls back to approx when the selection crosses inline formatting', () => {
     const a = captureAnchor(SRC, [4, 4], 'a one-line flag');
     expect(a.approx).toBe(true);
@@ -83,6 +103,24 @@ describe('locate', () => {
     const a = captureAnchor(SRC, [3, 3], 'single release');
     expect(locate(SRC.replace('single release', 'staged rollout'), a)).toBeNull();
   });
+  it('picks the context-matched hit in a source with thousands of occurrences', () => {
+    const lines = Array.from({ length: 2000 }, (_, i) => `row ${i}: the flag is on.`);
+    lines[1500] = 'unique marker: the flag is on. tail marker';
+    const big = lines.join('\n');
+    const at = big.indexOf('the flag', big.indexOf('unique marker'));
+    const anchor = {
+      quote: 'the flag',
+      approx: false,
+      prefix: big.slice(at - 32, at),
+      suffix: big.slice(at + 8, at + 40),
+      lines: [1, 1],
+    };
+    const started = Date.now();
+    const hit = locate(big, anchor);
+    expect(hit.start).toBe(at);
+    expect(hit.lines).toEqual([1501, 1501]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
   it('approx and block anchors resolve by line range only', () => {
     const approx = captureAnchor(SRC, [4, 4], 'a one-line flag');
     expect(locate(SRC, approx)).toEqual({ start: null, end: null, lines: [4, 4] });
@@ -100,5 +138,28 @@ describe('nthInLines / findAll', () => {
     const second = SRC.lastIndexOf('The beta');
     expect(findAll(SRC, 'The beta')).toHaveLength(2);
     expect(nthInLines(SRC, [6, 6], second, 'The beta')).toBe(1);
+  });
+  it('counts whitespace- and typography-tolerantly, like rangeForQuote does', () => {
+    const src = 'a b\nthe  beta and the beta again';
+    // the source quote has a newline where the rendered text has a space
+    expect(nthInLines(src, [1, 2], src.lastIndexOf('the beta'), 'the beta')).toBe(1);
+    const typo = "it's fine. it's fine.";
+    expect(nthInLines(typo, [1, 1], typo.lastIndexOf("it's"), 'it’s')).toBe(1);
+  });
+});
+
+describe('wsRegex', () => {
+  it('matches in both directions across typographic equivalents', () => {
+    const rendered = 'We don’t “ship” on Fridays – ever… really.';
+    const source = 'We don\'t "ship" on Fridays -- ever... really.';
+    // source quote → rendered text (what rangeForQuote needs)
+    expect(rendered.match(wsRegex('don\'t "ship" on Fridays -- ever...'))[0]).toBe(
+      'don’t “ship” on Fridays – ever…'
+    );
+    // rendered selection → source text (what captureAnchor needs)
+    expect(source.match(wsRegex('don’t “ship” on Fridays – ever…'))[0]).toBe(
+      'don\'t "ship" on Fridays -- ever...'
+    );
+    expect('an em — dash'.match(wsRegex('em --- dash'))[0]).toBe('em — dash');
   });
 });
