@@ -50,6 +50,8 @@ Fixed UUIDs (`src/seed.js` → `SEED_IDS`) so deep links are stable across re-se
 | **Other shared** (owner `other_user`, link) | Link-visibility note: readable by the stub user via direct link                                             |
 | **Review me**                               | Note with seeded review comments (exact fix, keep, block question, general)                                 |
 
+Review mode must be checked at 1280 (rail), 820 (drawer) and the mobile preset (pill, sheets, bar).
+
 History is seeded across Today / Yesterday / This Week / Older buckets.
 
 Re-seed (replaces, never duplicates) or force the retention cron:
