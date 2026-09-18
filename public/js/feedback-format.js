@@ -1,6 +1,6 @@
 // Turns a note's comments into the compact plain-text block handed to an agent.
 // Pure; used by the Copy feedback button now and by GET /feedback later.
-import { findAll } from './anchor.js';
+import { findAll, locate } from './anchor.js';
 
 const ELIDE_OVER_WORDS = 12;
 const ELIDE_KEEP_WORDS = 5;
@@ -32,17 +32,18 @@ function anchorText(anchor, source) {
   return out;
 }
 
-function itemLines(item, source, round) {
+/** `hit` is `locate(source, item.anchor)` — null when the anchor is gone. */
+function itemLines(item, source, round, hit) {
   const showTag = item.tag !== 'keep';
-  let head = `${item.id}${showTag ? ` ${item.tag}` : ''} ${lineRef(item.anchor.lines)} ${anchorText(item.anchor, source)}`;
+  const at = hit ? hit.lines : item.anchor.lines;
+  let head = `${item.id}${showTag ? ` ${item.tag}` : ''} ${lineRef(at)} ${anchorText(item.anchor, source)}`;
   if (item.replace) head += ` => "${esc(item.replace)}"`;
   if (item.carried > 0) head += ` (carried: unchanged since round ${round - item.carried})`;
+  if (!hit) head += ' (anchor not found in current source)';
   const lines = [head];
   if (item.note && !item.replace) lines.push(...item.note.split('\n').map((l) => `  ${l}`));
   return lines;
 }
-
-const byPosition = (a, b) => a.anchor.lines[0] - b.anchor.lines[0] || a.id.localeCompare(b.id);
 
 /**
  * @param {{ round: number, items: any[] }} comments
@@ -59,6 +60,11 @@ export function formatFeedback(comments, source, meta, opts = {}) {
     "# Edit the existing doc in place; change nothing else. Then list any ids you didn't apply + why.",
   ];
   const anchored = items.filter((i) => i.tag !== 'general' && i.anchor);
+  // The legend promises "L = line @ rev {current}", so resolve every anchor
+  // against the source once and print (and sort by) where it sits NOW.
+  const hits = new Map(anchored.map((i) => [i, locate(source, i.anchor)]));
+  const lineOf = (i) => (hits.get(i) || i.anchor).lines[0];
+  const byPosition = (a, b) => lineOf(a) - lineOf(b) || a.id.localeCompare(b.id);
   const sections = [
     [
       'VIOLATED — kept text was changed; restore it',
@@ -73,7 +79,8 @@ export function formatFeedback(comments, source, meta, opts = {}) {
     if (!list.length) continue;
     any = true;
     out.push('', title);
-    for (const item of [...list].sort(byPosition)) out.push(...itemLines(item, source, round));
+    for (const item of [...list].sort(byPosition))
+      out.push(...itemLines(item, source, round, hits.get(item)));
   }
   const general = items.filter((i) => i.tag === 'general' && i.status === 'open' && i.note);
   if (general.length) {

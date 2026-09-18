@@ -42,7 +42,7 @@ describe('formatFeedback', () => {
     expect(fmt([item()])).not.toContain('<in');
   });
   it('elides quotes longer than 12 words and uses a line range', () => {
-    const long = 'one two three four five six seven eight nine ten eleven twelve thirteen';
+    const long = 'one two three four\nfive six seven eight\nnine ten eleven twelve thirteen';
     const out = formatFeedback(
       {
         round: 1,
@@ -50,7 +50,7 @@ describe('formatFeedback', () => {
           item({ anchor: { quote: long, approx: false, prefix: '', suffix: '', lines: [2, 4] } }),
         ],
       },
-      long,
+      `head\n${long}`,
       { title: 'T', rev: 0 }
     );
     expect(out).toContain('L2-4 "one two three four five … nine ten eleven twelve thirteen"');
@@ -98,6 +98,27 @@ describe('formatFeedback', () => {
     expect(fmt([item({ id: 'c3', status: 'addressed' })], { includeAddressed: true })).toContain(
       'ADDRESSED\nc3 fix L3 "soon"'
     );
+  });
+  it('prints the line the quote is on NOW, not the line it was captured at', () => {
+    const moved = `intro\n\n${SRC}`;
+    const out = formatFeedback({ round: 1, items: [item({ note: 'Give a date' })] }, moved, {
+      title: 'Plan',
+      rev: 4,
+    });
+    expect(out).toContain('c1 fix L5 "soon"');
+    expect(out).not.toContain('L3');
+  });
+  it('keeps the stored lines and flags anchors that are gone', () => {
+    const out = fmt([item({ id: 'c1', anchor: { ...item().anchor, quote: 'vanished' } })]);
+    expect(out).toContain('c1 fix L3 "vanished" (anchor not found in current source)');
+  });
+  it('sorts by the resolved lines, not the stored ones', () => {
+    const early = item({
+      id: 'c9',
+      anchor: { quote: 'Tail', approx: false, prefix: '', suffix: ' latency', lines: [9, 9] },
+    });
+    const out = fmt([item({ id: 'c1' }), early]);
+    expect(out.indexOf('c9 ')).toBeLessThan(out.indexOf('c1 '));
   });
   it('omits empty sections and says so when nothing is open', () => {
     expect(fmt([])).toMatch(/\n\n\(no open feedback\)$/);
