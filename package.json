@@ -23,7 +23,7 @@
   "license": "ISC",
   "packageManager": "pnpm@10.27.0",
   "dependencies": {
-    "hono": "^4.12.0"
+    "hono": "^4.13.8"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.21",
