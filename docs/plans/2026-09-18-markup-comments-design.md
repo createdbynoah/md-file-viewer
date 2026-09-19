@@ -1,7 +1,7 @@
 # Markup Comments + Agent Feedback — Design
 
 Date: 2026-09-18
-Status: approved design, pre-implementation
+Status: implemented through phase A3 (amended to match what was built)
 
 ## Goal
 
@@ -46,7 +46,7 @@ Highlight colors: `fix`/`q` highlight tint, `keep` success tint, `cut` danger ti
 
 ### After a new revision
 
-A banner in review mode: "Round 2: 4 addressed · 1 carried over · 1 keep violated". Addressed comments collapse under a disclosure, each with "Reopen" and a mini-diff (old quote → `replacedBy`, rendered with the existing jsdiff). Violated keeps are pinned first in danger color with two actions: "Accept change" (drops the keep) or leave it (exports under VIOLATED).
+A banner in review mode: "Round 2: 4 addressed · 1 carried over · 1 keep violated", dismissed per note and revision (`localStorage` `triageSeen:{id}:{rev}`, capped at 50 entries). When the save landed without a re-check (a triage failure or the budget skip), the banner says the comments were not re-checked instead. Addressed comments collapse under a disclosure, each with "Reopen" and a mini-diff (old quote → `replacedBy`, rendered with the existing jsdiff). Violated keeps are pinned first in danger color with two actions: "Accept change" (deletes the keep) or leave it (exports under VIOLATED). Card heads carry the same markers as the export — the tag, a carried count, and the violated/addressed state.
 
 ### Copy feedback
 
@@ -98,8 +98,10 @@ Rules:
 8. Section order: VIOLATED, KEEP, OPEN (document order), GENERAL. Empty sections are omitted.
 9. Addressed comments are never exported by default, so each round costs roughly (open + keeps) × 15–25 tokens plus the ~60-token legend. The legend is always included; a fresh agent session has no memory of it.
 10. The header's rev stamp lets an API-capable agent fetch that exact revision; an agent whose copy has drifted falls back on quotes.
+11. `L` is re-resolved against the current source for every open item. A resolved item has no live anchor, so it prints its `resolvedLines` instead; a VIOLATED line adds the text standing there now — `k2 L4 "p95 under 200 ms" (now "p95 under 250 ms")` — elided and escaped like any other quoted text.
+12. `?include=addressed` adds an ADDRESSED section, each line ending `(addressed in rev N)`, plus `; L as of rev N` when triage could not re-pin its position against the current revision.
 
-Alternate export — inline CriticMarkup: the full source with `{==quote==}{>>c4 fix: note<<}` embedded, for agents with no copy of the document. Costs the whole document in tokens; never the default.
+Alternate export — inline CriticMarkup: the full source with `{==quote==}{>>c4 fix: note<<}` embedded, for agents with no copy of the document. Costs the whole document in tokens; never the default. CriticMarkup cannot express crossing or nested spans, so identical ranges merge into one highlight (comments in id order) and anything merely overlapping degrades to a trailing `~"quote"` note; a quote containing a delimiter degrades the same way, and every piece of user text inside a comment is flattened to one line with the four delimiters neutralized. General notes and violated keeps are listed above the document: `{>>k2 keep VIOLATED — restore exactly: "…" (near L4) — now "…"<<}`.
 
 One generator, `formatFeedback(comments, source, meta, opts)`, produces both the clipboard text and (phase B) the endpoint body.
 
@@ -111,6 +113,7 @@ One KV value per note at `comments:{uuid}`. Owner-only, last-write-wins. Removed
 {
   nextId: 10,
   round: 2,
+  lastTriage: { rev, round, addressed, carried, violated, restored }, // most recent re-check
   items: [{
     id: 'c4',
     tag: 'fix' | 'cut' | 'q' | 'keep' | 'general',
@@ -126,14 +129,21 @@ One KV value per note at `comments:{uuid}`. Owner-only, last-write-wins. Removed
     },
     rev: 3,                          // revision the anchor is resolved against
     status: 'open' | 'addressed' | 'violated',
-    carried: 1,                      // rounds survived unaddressed
-    resolvedRev: undefined,
-    replacedBy: undefined,           // text now between prefix and suffix
+    carried: 1,                      // rounds survived unaddressed; fix/cut only
+    resolvedRev: undefined,          // revision that addressed/violated it
+    replacedBy: undefined,           // text now between prefix and suffix ('' = deleted)
+    resolvedLines: undefined,        // where the resolved item sits now
+    linesRev: undefined,             // revision `resolvedLines` were pinned against
     authorId: '<sub>',
     createdAt: '<iso>',
   }],
 }
 ```
+
+`replacedBy: ''` (a full deletion) is deliberately distinct from `undefined`
+(nothing could be pinned down). Reopening an item clears all four resolution
+fields and resets `carried` to 0 — it now points at text that only appeared in
+the latest revision, so it has survived no rounds.
 
 ## Anchoring
 
@@ -157,25 +167,35 @@ Runs server-side inside `PUT /api/files/:id`, where old and new source are both 
 | `keep`         | stays, re-anchored silently     | `violated`                                                         |
 | `q`, `general` | unchanged — manual resolve only | `q`: falls back to its block; still manual                         |
 
-- Block anchors compare the block's source text.
-- `approx` anchors are located by whitespace-normalized match of the rendered quote against the source with inline markers (`*`, `_`, `` ` ``, link syntax) stripped.
+- Block anchors compare the block's source text; a blank block (and an `approx` quote that strips to nothing, e.g. `***`) has nothing to compare, so it counts as found at its old lines, clamped into the new source.
+- `approx` anchors are located by whitespace-normalized match of the rendered quote against the source with inline markers (`*`, `_`, `` ` ``, link syntax) stripped. Intra-word underscores survive stripping (`config_max_retries` is an identifier, not emphasis).
+- A `q` whose quote is gone falls back to a `lines s–e` block anchor and stays open.
+- **Duplicates, one rule for every tag.** If the quote occurred more than once in the old source, or occurs more than once in the new one, a surviving hit counts as found only while it still carries matching context: the full stored prefix/suffix, else the last/first 8 characters of them (both sides required when both were captured). Otherwise the anchor is gone — so an edit to the commented copy is not masked by an untouched twin. A quote that was unique in the old source and survives once is accepted regardless of context; an anchor with no stored context at all (legacy) falls back to the nearest hit by line.
+- **Matching is never fuzzy.** `keep` hits must be byte-identical; every other tag also accepts the whitespace/typographer-tolerant form, but only when there is no literal hit.
+- **CRLF is not a change.** When either source contains `\r`, both sources and the stored quote/prefix/suffix/`replacedBy` are compared `\r`-stripped (a browser textarea always saves LF). Dropping `\r` never changes a line number, and stored comments are not rewritten.
+- **Already-stale anchors stay open.** A `fix`/`cut` that could not be located in the OLD source either was not addressed by this revision; it keeps its anchor and its "anchor not found" marker. A block/`approx` anchor whose `rev` is not the previous revision (a previous triage failed) is held at its clamped lines without carrying, rather than compared against a base it was never resolved against.
+- `replacedSpan` pins what replaced a gone quote between its surviving prefix and suffix, retrying at 32 → 16 → 8 characters of context and capping the captured text at 2000 characters. A deletion at a paragraph boundary reports the line the gap closed onto, not the prefix's line.
+- **Re-pinning.** A resolved item's `resolvedLines` are refreshed on every later revision — follow `replacedBy` if it is still findable, else (for a still-violated keep) re-run `replacedSpan`, which also refreshes `replacedBy`. `linesRev` records the revision the lines were pinned against; when nothing can be pinned, the old lines stay and `linesRev` goes stale, which the export says out loud.
 - `round++` when a revision lands while at least one item is `open` or `violated`.
-- Reopen (`addressed` → `open`): re-anchor to `replacedBy` if it can be located, otherwise to the containing block.
-- A triage failure never fails the PUT: it is logged and comments are left untouched at their old `rev`; the client shows them as "unverified" until the next successful triage.
+- Reopen (`addressed` → `open`): re-anchor to `replacedBy` if it can be located, otherwise to the containing block; resolution fields and `carried` are cleared.
+- A triage failure never fails the PUT: it is logged and comments are left untouched at their old `rev`; the client shows them as "not re-checked" until the next successful triage.
+- **Budget.** Triage cost scales with note size × comment count, so PUT skips it (logging `comments.triageSkipped`, answering `triage: null`, comments untouched) when `content.length * items.length > 5e8` — roughly 1 MB × 500 comments.
 
 ## API
 
 All owner-only; non-owners and missing notes answer 404, matching the existing ownership rule.
 
-| Method | Path                           | Purpose                                                               |
-| ------ | ------------------------------ | --------------------------------------------------------------------- |
-| GET    | `/api/files/:id/comments`      | `{ round, items }`                                                    |
-| POST   | `/api/files/:id/comments`      | Create; server assigns `id`, `rev = currentRev`, `authorId`           |
-| PATCH  | `/api/files/:id/comments/:cid` | `note`, `tag`, `replace`, `status` (reopen / resolve / accept change) |
-| DELETE | `/api/files/:id/comments/:cid` | Delete one                                                            |
-| GET    | `/api/files/:id/feedback`      | Phase B. `text/plain`; `?format=json`; `?include=addressed`           |
+| Method | Path                           | Purpose                                                     |
+| ------ | ------------------------------ | ----------------------------------------------------------- |
+| GET    | `/api/files/:id/comments`      | `{ round, items, lastTriage }`                              |
+| POST   | `/api/files/:id/comments`      | Create; server assigns `id`, `rev = currentRev`, `authorId` |
+| PATCH  | `/api/files/:id/comments/:cid` | `note`, `tag`, `replace`, `status` (reopen / resolve)       |
+| DELETE | `/api/files/:id/comments/:cid` | Delete one — also how "Accept change" drops a violated keep |
+| GET    | `/api/files/:id/feedback`      | Phase B. `text/plain`; `?format=json`; `?include=addressed` |
 
-POST validates the anchor against the current source (quote must locate, or `approx` with a valid line range); a stale client gets 409 and refetches.
+POST validates the anchor against the current source (quote must locate, or `approx` with a valid line range); a stale client gets 409 and refetches. It then rebuilds the anchor's context from the source rather than trusting the client's copy, because triage later reads `replacedBy` from between that prefix and suffix. PUT re-triages the note's comments (see Triage).
+
+A violated item has no valid status transition — `PATCH { status }` on one answers 400. The owner either restores the text (triage reopens it by itself) or deletes the comment. A reopen (`addressed` → `open`) re-anchors, clears `replacedBy` / `resolvedRev` / `resolvedLines` / `linesRev`, and resets `carried` to 0.
 
 Phase B auth: bearer tokens `mdv_…`, stored hashed at `token:{sha256}` → `sub`, checked in `resolveUser()` after the UAT stub short-circuit and before the Access JWT path. Scoped to files, comments, and feedback routes. A thin MCP server then exposes `get_doc`, `get_feedback`, `put_doc`, `reply(id)`.
 
