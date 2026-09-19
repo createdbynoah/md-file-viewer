@@ -268,6 +268,43 @@ describe('comments', () => {
     expect(item.rev).toBe(1);
   });
 
+  it('reopening resets carried, so the export cannot claim an older round', async () => {
+    await post(id, { tag: 'fix', note: 'Give a date', anchor: quoteAnchor('soon', 3) });
+    // carried: 1 — the fix survived a revision untouched...
+    await put(id, SRC.replace('Rollback is one flag.', 'Rollback is two flags.'));
+    expect((await list(id)).items[0].carried).toBe(1);
+    // ...then it was addressed, and the owner reopens it against the new text.
+    await put(id, SRC.replace('soon', 'on 1 March').replace('one flag', 'two flags'));
+    const res = await authed(
+      `/api/files/${id}/comments/c1`,
+      json({ status: 'open' }, { method: 'PATCH' })
+    );
+    expect((await res.json()).item).toMatchObject({ status: 'open', carried: 0 });
+  });
+
+  it('skips triage instead of burning CPU on a huge note with many comments', async () => {
+    const env = devEnv();
+    const items = Array.from({ length: 500 }, (_, i) => ({
+      id: `c${i + 1}`,
+      tag: 'cut',
+      note: '',
+      anchor: quoteAnchor('soon', 3),
+      rev: 0,
+      status: 'open',
+      carried: 0,
+      authorId: 'user_local_dev',
+      createdAt: new Date().toISOString(),
+    }));
+    await env.HISTORY.put(`comments:${id}`, JSON.stringify({ nextId: 501, round: 1, items }));
+    const huge = `${SRC}\n${'filler line of text\n'.repeat(60000)}`; // > 1 MB
+    const res = await put(id, huge);
+    expect(res.status).toBe(200);
+    expect((await res.json()).triage).toBeNull();
+    const after = await list(id);
+    expect(after.round).toBe(1);
+    expect(after.items[0]).toMatchObject({ rev: 0, carried: 0, status: 'open' }); // untouched
+  });
+
   it('a violated keep cannot be re-statused through PATCH, only deleted', async () => {
     await post(id, { tag: 'keep', anchor: quoteAnchor('Rollback is one flag.', 4) });
     await put(id, SRC.replace('one flag', 'two flags'));

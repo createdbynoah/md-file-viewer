@@ -594,7 +594,13 @@ export function initComments(deps) {
     if (current && current.owned) {
       try {
         const res = await api(base());
-        if (res.ok && note() && note().id === current.id) data = await res.json();
+        // Two awaits, two chances for the reader to have navigated away —
+        // re-check after parsing too, or a slow parse can paint one note's
+        // comments over another.
+        if (res.ok && note() && note().id === current.id) {
+          const body = await res.json();
+          if (note() && note().id === current.id) data = body;
+        }
       } catch {}
     }
     loading = false;

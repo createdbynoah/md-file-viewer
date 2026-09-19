@@ -655,6 +655,12 @@ app.patch('/api/files/:id/visibility', async (c) => {
 
 // ── Edit + revisions ────────────────────────────────────────────────────────
 
+// Triage cost scales with note size × comment count (each comment scans the
+// source). Past this product — roughly 1 MB × 500 comments, measured at ~1.1 s
+// of CPU for 2 MB × 500 on an M1 — the re-check is skipped rather than risking
+// the Worker CPU limit on a save that has already succeeded.
+const TRIAGE_BUDGET = 5e8;
+
 app.put('/api/files/:id', async (c) => {
   const id = c.req.param('id');
   const user = c.get('user');
@@ -732,9 +738,20 @@ app.put('/api/files/:id', async (c) => {
   try {
     const comments = await readCommentsOrNull(c.env.HISTORY, id);
     if (comments && comments.items.length) {
-      const result = triage(comments, current, content, n);
-      await c.env.HISTORY.put(commentsKey(id), JSON.stringify(result.comments));
-      triageSummary = result.summary;
+      if (content.length * comments.items.length > TRIAGE_BUDGET) {
+        // Past the budget, leave the comments exactly as they are: the save
+        // has already succeeded, and the client shows them as not re-checked.
+        log.warn('comments.triageSkipped', {
+          fileId: id,
+          rev: n,
+          bytes: content.length,
+          items: comments.items.length,
+        });
+      } else {
+        const result = triage(comments, current, content, n);
+        await c.env.HISTORY.put(commentsKey(id), JSON.stringify(result.comments));
+        triageSummary = result.summary;
+      }
     }
   } catch (err) {
     log.error('comments.triageFailed', { fileId: id, rev: n, error: String(err) });
@@ -919,7 +936,11 @@ app.patch('/api/files/:id/comments/:cid', async (c) => {
       delete item.replacedBy;
       delete item.resolvedLines;
       delete item.resolvedRev;
+      delete item.linesRev;
       item.rev = meta.currentRev || 0;
+      // The comment now points at text that only appeared in this revision, so
+      // it has survived no rounds: "unchanged since round N" would be a lie.
+      item.carried = 0;
     }
     item.status = body.status;
   }
