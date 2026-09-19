@@ -194,39 +194,95 @@ export function replacedSpan(newSource, anchor, starts = lineTable(newSource)) {
   return null;
 }
 
+// Shortened context tier used when the full stored prefix/suffix no longer
+// matches: the 8 characters closest to the quote on each side. Evidence this
+// short is weak, so when BOTH sides were captured it must agree on both — a
+// lone 8-char match on one side is exactly what an unrelated twin elsewhere
+// in the note tends to produce by accident.
+const SHORT_CONTEXT = 8;
+
 /**
- * `keep` requires a byte-identical quote (no ws/typographic tolerance). If it
- * occurs more than once, "found" additionally requires that at least one
- * occurrence's literal neighboring text still matches the anchor's stored
- * prefix or suffix — otherwise a duplicate elsewhere in the note would mask
- * an edit to the specific occurrence the reviewer commented on. A legacy
- * anchor saved with no stored context at all (`prefix === '' && suffix ===
- * ''`, e.g. from before the server captured it) has nothing to disambiguate
- * with, so duplicates fall back to "nearest hit by line" instead of being
- * unconditionally violated.
+ * How strongly the text around [start, end) agrees with the anchor's stored
+ * context: the full literal prefix/suffix first (2 per side, as
+ * `contextScore`), and only if neither side survives, the last/first
+ * `SHORT_CONTEXT` characters (1 per side, both sides required when both were
+ * captured). A full match therefore always outranks a short one.
  */
-function followKeep(newSource, newStarts, a) {
-  const hits = findAll(newSource, a.quote);
-  if (hits.length === 0) return null;
-  if (hits.length === 1) {
-    const start = hits[0];
-    return { anchor: anchorAt(newSource, start, start + a.quote.length, newStarts) };
-  }
-  if (!a.prefix && !a.suffix) {
-    const start = pickNearest(newStarts, hits, a.lines[0], (h) => h);
-    return { anchor: anchorAt(newSource, start, start + a.quote.length, newStarts) };
+function contextAgreement(source, start, end, anchor) {
+  const full = contextScore(source, start, end, anchor);
+  if (full > 0) return full;
+  const pre = anchor.prefix.slice(-SHORT_CONTEXT);
+  const post = anchor.suffix.slice(0, SHORT_CONTEXT);
+  const preOk = pre !== '' && source.slice(start - pre.length, start) === pre;
+  const postOk = post !== '' && source.slice(end, end + post.length) === post;
+  if (pre && post) return preOk && postOk ? 1 : 0;
+  return preOk || postOk ? 1 : 0;
+}
+
+/**
+ * The hit to re-anchor to when the quote is AMBIGUOUS — it occurred more than
+ * once in the old source, or does in the new one. Picking by line distance
+ * alone would let a surviving twin mask an edit to the occurrence the
+ * reviewer actually commented on (a fix would look "carried" onto the wrong
+ * sentence; a violated keep would look untouched), so a hit must carry some
+ * surviving context to be eligible: best agreement wins, ties broken by
+ * distance from the remembered line. A legacy anchor with no stored context
+ * at all has nothing to disambiguate with, so it falls back to the nearest
+ * hit rather than being declared gone.
+ * @returns {{ start: number, end: number } | null}
+ */
+function pickAmbiguous(source, starts, anchor, hits) {
+  if (!anchor.prefix && !anchor.suffix) {
+    return pickNearest(starts, hits, anchor.lines[0], (h) => h.start);
   }
   let best = null;
-  for (const start of hits) {
-    const end = start + a.quote.length;
-    const score = contextScore(newSource, start, end, a);
+  for (const hit of hits) {
+    const score = contextAgreement(source, hit.start, hit.end, anchor);
     if (score === 0) continue;
-    const dist = Math.abs(lineOf(newStarts, start) - a.lines[0]);
+    const dist = Math.abs(lineOf(starts, hit.start) - anchor.lines[0]);
     if (!best || score > best.score || (score === best.score && dist < best.dist)) {
-      best = { start, end, score, dist };
+      best = { ...hit, score, dist };
     }
   }
-  return best ? { anchor: anchorAt(newSource, best.start, best.end, newStarts) } : null;
+  return best;
+}
+
+/**
+ * Follow a quote anchor into the new source. `keep` hits must be
+ * byte-identical (no whitespace/typographic tolerance); for every other tag
+ * the tolerant forms are accepted, but only when there is no literal hit at
+ * all.
+ *
+ * Duplicates are the interesting case, and the rule is shared by both: if the
+ * quote occurred more than once in the OLD source, or occurs more than once
+ * in the new one, the surviving hit must carry matching context
+ * (`pickAmbiguous`) — otherwise the anchor is gone. A quote that was unique
+ * in the old source and survives exactly once is accepted as-is, context or
+ * not. The old-source scan is only paid for in the one case that can't be
+ * decided without it (a single hit with no surviving context).
+ */
+function followQuote(oldSource, newSource, newStarts, a, keep) {
+  let hits = findAll(newSource, a.quote).map((start) => ({
+    start,
+    end: start + a.quote.length,
+  }));
+  if (!keep && !hits.length) {
+    hits = matchesFor(newSource, a.quote).map((m) => ({
+      start: m.index,
+      end: m.index + m[0].length,
+    }));
+  }
+  if (!hits.length) return null;
+  const found = ({ start, end }) => ({ anchor: anchorAt(newSource, start, end, newStarts) });
+  if (hits.length === 1) {
+    const only = hits[0];
+    if (!a.prefix && !a.suffix) return found(only);
+    if (contextAgreement(newSource, only.start, only.end, a) > 0) return found(only);
+    if (findAll(oldSource, a.quote).length <= 1) return found(only);
+    return null; // a twin existed before; this lone survivor isn't it
+  }
+  const best = pickAmbiguous(newSource, newStarts, a, hits);
+  return best ? found(best) : null;
 }
 
 /**
@@ -278,9 +334,7 @@ function follow(oldSource, newSource, item, newStarts, strippedRef) {
       },
     };
   }
-  if (item.tag === 'keep') return followKeep(newSource, newStarts, a);
-  const hit = locate(newSource, a);
-  return hit ? { anchor: anchorAt(newSource, hit.start, hit.end, newStarts) } : null;
+  return followQuote(oldSource, newSource, newStarts, a, item.tag === 'keep');
 }
 
 function withoutResolution(item) {

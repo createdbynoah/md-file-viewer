@@ -407,6 +407,78 @@ describe('triage — R1 replacedSpan context fallback (32 -> 16 -> 8 chars)', ()
   });
 });
 
+describe('triage — I1/I2 duplicated text needs surviving context', () => {
+  const DUP = [
+    '# Cadence', // 1
+    '', // 2
+    'We ship weekly.', // 3 (twin, never anchored)
+    'Middle line.', // 4
+    '', // 5
+    'More text here.', // 6
+    'We ship weekly.', // 7 (anchored)
+    'Tail line.', // 8
+  ].join('\n');
+  const atSeven = () => captureAnchor(DUP, [7, 7], 'We ship weekly.');
+  // Only the L7 copy is rewritten; the L3 twin survives byte-identical.
+  const rewritten = DUP.replace(
+    'More text here.\nWe ship weekly.',
+    'More text here.\nWe ship twice a week.'
+  );
+
+  it('a fix on the L7 copy is addressed, not falsely carried onto the untouched L3 twin', () => {
+    const r = triage(base([item('d1', 'fix', atSeven())]), DUP, rewritten, 1);
+    expect(byId(r, 'd1')).toMatchObject({ status: 'addressed', carried: 0, rev: 1 });
+    expect(r.summary).toMatchObject({ addressed: 1, carried: 0 });
+  });
+
+  it('a keep on the L7 copy is violated even though one exact hit survives', () => {
+    const r = triage(base([item('kd7', 'keep', atSeven(), { note: '' })]), DUP, rewritten, 1);
+    expect(byId(r, 'kd7').status).toBe('violated');
+    expect(r.summary.violated).toBe(1);
+  });
+
+  it('a short duplicated quote ("the") is addressed rather than jumping to a twin', () => {
+    const SRC = 'the alpha line.\n\nthe omega line.';
+    const anchor = captureAnchor(SRC, [3, 3], 'the');
+    const r = triage(
+      base([item('d2', 'fix', anchor)]),
+      SRC,
+      SRC.replace('the omega', 'an omega'),
+      1
+    );
+    expect(byId(r, 'd2').status).toBe('addressed');
+  });
+
+  it('a duplicate whose own context survives is still carried, at its new lines', () => {
+    const r = triage(base([item('d3', 'fix', atSeven())]), DUP, 'Prepended.\n\n' + DUP, 1);
+    expect(byId(r, 'd3')).toMatchObject({ status: 'open', carried: 1 });
+    expect(byId(r, 'd3').anchor.lines).toEqual([9, 9]);
+  });
+
+  it('a unique quote is still found without any context agreement', () => {
+    const anchor = captureAnchor(DUP, [4, 4], 'Middle line.');
+    const moved = DUP.replace('# Cadence', '# Release cadence').replace(
+      '\n\nMore text',
+      '\nMore text'
+    );
+    const r = triage(base([item('d4', 'fix', anchor)]), DUP, moved, 1);
+    expect(byId(r, 'd4')).toMatchObject({ status: 'open', carried: 1 });
+  });
+
+  it('a legacy duplicate with no stored context falls back to the nearest hit', () => {
+    const legacy = {
+      quote: 'We ship weekly.',
+      approx: false,
+      prefix: '',
+      suffix: '',
+      lines: [7, 7],
+    };
+    const r = triage(base([item('d5', 'fix', legacy)]), DUP, 'Intro.\n' + DUP, 1);
+    expect(byId(r, 'd5')).toMatchObject({ status: 'open', carried: 1 });
+    expect(byId(r, 'd5').anchor.lines).toEqual([8, 8]); // the anchored copy, nearest L7
+  });
+});
+
 describe('triage — F1 performance at Worker scale', () => {
   it('triages 400 items against a ~1 MB repetitive note in well under 5s', () => {
     const N = 15000;
