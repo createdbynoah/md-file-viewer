@@ -69,13 +69,29 @@ function nearest(starts, offsets, line) {
 }
 
 /**
+ * Every ws/typography-tolerant match of `quote` in `text`, or `[]` when
+ * `quote` is empty (or whitespace-only). `wsRegex('')` builds an empty
+ * pattern that matches at every offset — O(text length) hits, each costing a
+ * line lookup — so every caller must route through here instead of calling
+ * `wsRegex` directly on a quote that might have stripped down to nothing.
+ */
+function matchesFor(text, quote) {
+  if (!quote.trim()) return [];
+  return [...text.matchAll(wsRegex(quote))];
+}
+
+/**
  * The new text sitting between an anchor's surviving prefix and suffix, or
  * null when a side can't be pinned down in `newSource`. The quote itself is
  * captured whitespace-trimmed, so a boundary space next to it lives in
  * `prefix`/`suffix`; search on the trimmed boundary (nearest the old line
- * for the prefix) and then `.trim()` the extracted span, so a boundary space
- * that did or didn't survive never leaks into the reported replacement — a
- * genuine full deletion still yields `''` rather than a stray space.
+ * for the prefix). `lines` are measured from the TRIMMED replacement text
+ * (its first to its last non-whitespace character), not from the raw
+ * start/end — the raw span can include boundary newlines from the
+ * prefix/suffix seam (e.g. a paragraph break) that would otherwise inflate
+ * the reported range past where the replacement text actually sits. A
+ * genuine full deletion still yields `text: ''` with both `lines` entries
+ * set to the (single, valid) line the deletion sits on.
  * @param {number[]} [starts] a `lineTable(newSource)` result, when the
  *   caller already has one.
  */
@@ -109,9 +125,19 @@ export function replacedSpan(newSource, anchor, starts = lineTable(newSource)) {
   if (end < start) end = start;
   if (end - start > MAX_REPLACED) return null;
 
+  const raw = newSource.slice(start, end);
+  const text = raw.trim();
+  if (text === '') {
+    const line = lineOf(starts, start);
+    return { text: '', lines: [line, line] };
+  }
+  const leadingWs = raw.length - raw.trimStart().length;
+  const trailingWs = raw.length - raw.trimEnd().length;
+  const textStart = start + leadingWs;
+  const textEnd = end - trailingWs;
   return {
-    text: newSource.slice(start, end).trim(),
-    lines: [lineOf(starts, start), lineOf(starts, Math.max(start, end - 1))],
+    text,
+    lines: [lineOf(starts, textStart), lineOf(starts, Math.max(textStart, textEnd - 1))],
   };
 }
 
@@ -120,13 +146,21 @@ export function replacedSpan(newSource, anchor, starts = lineTable(newSource)) {
  * occurs more than once, "found" additionally requires that at least one
  * occurrence's literal neighboring text still matches the anchor's stored
  * prefix or suffix — otherwise a duplicate elsewhere in the note would mask
- * an edit to the specific occurrence the reviewer commented on.
+ * an edit to the specific occurrence the reviewer commented on. A legacy
+ * anchor saved with no stored context at all (`prefix === '' && suffix ===
+ * ''`, e.g. from before the server captured it) has nothing to disambiguate
+ * with, so duplicates fall back to "nearest hit by line" instead of being
+ * unconditionally violated.
  */
 function followKeep(newSource, newStarts, a) {
   const hits = findAll(newSource, a.quote);
   if (hits.length === 0) return null;
   if (hits.length === 1) {
     const start = hits[0];
+    return { anchor: anchorAt(newSource, start, start + a.quote.length, newStarts) };
+  }
+  if (!a.prefix && !a.suffix) {
+    const start = pickNearest(newStarts, hits, a.lines[0], (h) => h);
     return { anchor: anchorAt(newSource, start, start + a.quote.length, newStarts) };
   }
   let best = null;
@@ -170,8 +204,18 @@ function follow(oldSource, newSource, item, newStarts, strippedRef) {
     return { anchor: withBlockLines(a, first, last) };
   }
   if (a.approx) {
+    const strippedQuote = stripInline(a.quote);
+    if (!strippedQuote.trim()) {
+      // The quote was pure markdown markers (e.g. "***"): there's nothing
+      // left to compare, so don't search — an empty pattern would match at
+      // every offset (O(source length), and yield an invalid zero-width
+      // range). Treat it as still there, at its old line range, clamped to
+      // the new source — same policy as a blank block (see the F3 branch).
+      const [s, e] = clampLines(newStarts.length, a.lines);
+      return { anchor: { ...a, lines: [s, e] } };
+    }
     const { stripped, starts: strippedStarts } = strippedRef();
-    const hits = [...stripped.matchAll(wsRegex(stripInline(a.quote)))];
+    const hits = matchesFor(stripped, strippedQuote);
     if (!hits.length) return null;
     const m = pickNearest(strippedStarts, hits, a.lines[0], (h) => h.index);
     return {
