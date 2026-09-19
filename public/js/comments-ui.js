@@ -227,7 +227,10 @@ export function initComments(deps) {
   // Bumped by every openComposer so a save that resolves late can tell whether
   // the composer it belongs to is still the one on screen.
   let composerToken = 0;
-  let composerView = null; // { composer, title, quoted } while a composer is open
+  // { composer, title, quoted, mark } while a composer is open; `mark` is the
+  // { range } or { block } being commented on, painted while the composer's
+  // focus has taken the page selection away.
+  let composerView = null;
   let sheet = null; // bottom sheet, sheet layout
   let sheetKind = null; // 'composer' | 'item' | 'list'
   let sheetBody = null;
@@ -239,6 +242,11 @@ export function initComments(deps) {
   let bar = null;
   let barSummary = null;
   let selectionTimer = 0;
+  // Set when a mouseup opened the composer from a drag-selection. The browser
+  // follows that mouseup with a click, and by then the composer's focus has
+  // collapsed the selection, so the click would read as "clicked away" and
+  // close the composer it just opened.
+  let selectionClick = false;
   let currentLayout = layoutFor(window.innerWidth);
   let lastWidth = window.innerWidth;
   /** @type {Map<string, { range: Range|null, block: Element|null, lines: [number, number] }>} */
@@ -278,7 +286,11 @@ export function initComments(deps) {
 
   function paintHighlights() {
     if (canHighlight) {
-      for (const name of [...new Set(Object.values(HIGHLIGHT_FOR)), 'review-active']) {
+      for (const name of [
+        ...new Set(Object.values(HIGHLIGHT_FOR)),
+        'review-active',
+        'review-pending',
+      ]) {
         CSS.highlights.delete(name);
       }
     }
@@ -286,6 +298,14 @@ export function initComments(deps) {
       node.classList.remove('review-block');
     if (!active()) return;
     if (pendingBlock) pendingBlock.classList.add('review-block');
+    const mark = composerView && composerView.mark;
+    if (mark && mark.range && canHighlight) {
+      CSS.highlights.set('review-pending', new Highlight(mark.range));
+    } else if (mark && mark.block) {
+      mark.block.classList.add('review-block');
+    } else if (mark && mark.range) {
+      closestBlock(mark.range.startContainer)?.classList.add('review-block');
+    }
     const groups = {};
     for (const item of data.items) {
       const t = targets.get(item.id);
@@ -682,7 +702,9 @@ export function initComments(deps) {
       document.documentElement.style.setProperty('--kb-inset', '0px');
     }
     composing = false;
+    const hadMark = composerView && composerView.mark;
     composerView = null;
+    if (hadMark) paintHighlights();
   }
 
   /** Put the composer into the current layout's container (sheet or popover). */
@@ -693,10 +715,14 @@ export function initComments(deps) {
     // openSheet() starts with closeFloating(), which clears these — set them last.
     composerView = view;
     composing = true;
+    if (view.mark) paintHighlights();
     view.composer.focus();
   }
 
-  /** opts: { anchor, rect } for new | { existing } to edit | { general } for the doc note. */
+  /**
+   * opts: { anchor, rect, range?|block? } for new | { existing } to edit |
+   * { general } for the doc note. `range`/`block` is what stays marked.
+   */
   function openComposer(opts) {
     closeFloating();
     hidePill();
@@ -727,7 +753,11 @@ export function initComments(deps) {
           }),
         ]
       : [];
-    presentComposer({ composer, title: isGeneral ? 'General note' : 'Comment', quoted }, opts.rect);
+    const mark = opts.range ? { range: opts.range } : opts.block ? { block: opts.block } : null;
+    presentComposer(
+      { composer, title: isGeneral ? 'General note' : 'Comment', quoted, mark },
+      opts.rect
+    );
   }
 
   /** Tap on a highlight where there is no rail: show that one comment. */
@@ -764,7 +794,9 @@ export function initComments(deps) {
     const text = sel.toString();
     const nth = occurrenceAt(scopes, text, range.startContainer, range.startOffset);
     const anchor = captureAnchor(deps.getSource(), lines, text, nth);
-    return anchor.quote ? { anchor, rect: range.getBoundingClientRect() } : null;
+    return anchor.quote
+      ? { anchor, rect: range.getBoundingClientRect(), range: range.cloneRange() }
+      : null;
   }
 
   function showPill(label, capture, block = null) {
@@ -797,7 +829,16 @@ export function initComments(deps) {
   function onSelectionEnd(e) {
     if (!active() || usesPill() || isChrome(e.target)) return;
     const capture = captureSelection();
-    if (capture) openComposer(capture);
+    if (!capture) return;
+    openComposer(capture);
+    selectionClick = true;
+  }
+
+  /** The click that follows a drag-select mouseup; true exactly once. */
+  function consumeSelectionClick() {
+    const was = selectionClick;
+    selectionClick = false;
+    return was;
   }
 
   function isChrome(target) {
@@ -822,6 +863,7 @@ export function initComments(deps) {
    * for nodes it considers clickable, and note prose is not one of them.
    */
   function onNoteClick(e) {
+    if (consumeSelectionClick()) return;
     if (!active() || isChrome(e.target)) return;
     if (!window.getSelection().isCollapsed) return;
     // A composer in a sheet covers the note; a tap through to it would open an
@@ -867,7 +909,9 @@ export function initComments(deps) {
    * `root`'s own listener has already handled them.
    */
   function onOutsideClick(e) {
-    if (!active() || isChrome(e.target) || root.contains(e.target)) return;
+    if (root.contains(e.target)) return;
+    if (consumeSelectionClick()) return;
+    if (!active() || isChrome(e.target)) return;
     if (!window.getSelection().isCollapsed) return;
     if (popover) closeFloating();
     hidePill();
@@ -892,6 +936,7 @@ export function initComments(deps) {
         openComposer({
           anchor: blockAnchor(parseLines(gutterBlock), kind, label),
           rect: gutterBlock.getBoundingClientRect(),
+          block: gutterBlock,
         });
       });
       scroller.append(gutterBtn);
@@ -954,7 +999,7 @@ export function initComments(deps) {
   pill.addEventListener('pointerdown', (e) => e.preventDefault());
   pill.addEventListener('click', () => {
     const capture = pending;
-    if (capture) openComposer(capture);
+    if (capture) openComposer(pendingBlock ? { ...capture, block: pendingBlock } : capture);
   });
   document.body.append(pill);
 
@@ -1007,6 +1052,9 @@ export function initComments(deps) {
     setDrawer(drawer.hidden);
     renderList();
   });
+  // A drag that ends outside the element it started in may get no click at
+  // all; never let a stale flag swallow the next real click.
+  document.addEventListener('mousedown', () => (selectionClick = false), true);
   document.addEventListener('mouseup', onSelectionEnd);
   document.addEventListener('selectionchange', onSelectionChange);
   document.addEventListener('click', onOutsideClick);

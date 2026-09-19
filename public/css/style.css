@@ -1379,6 +1379,13 @@ body.read-only #back-btn {
 ::highlight(review-active) {
   background-color: var(--accent-subtle);
 }
+/* The text a composer is open for; stands in for the page selection, which
+   the composer's focus clears. */
+::highlight(review-pending) {
+  background-color: var(--accent-subtle);
+  text-decoration: underline 2px var(--accent);
+  text-underline-offset: 3px;
+}
 
 #review-btn[aria-pressed='true'] {
   color: var(--accent);
@@ -1390,6 +1397,10 @@ body.read-only #back-btn {
 @media (min-width: 1024px) {
   .viewer-scroll.reviewing .markdown-body {
     padding-right: max(316px, calc((100% - 860px) / 2));
+  }
+  /* Keep the banner (and its Dismiss) clear of the rail, like the note body. */
+  .viewer-scroll.reviewing .review-banner {
+    margin-right: max(316px, calc((100% - 860px) / 2));
   }
 }
 .viewer-scroll.reviewing [data-line].review-block {
