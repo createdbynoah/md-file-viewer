@@ -49,8 +49,11 @@ function anchorText(anchor, source) {
   return out;
 }
 
-/** `hit` is `locate(source, item.anchor)` — null when the anchor is gone. */
-function itemLines(item, source, round, hit) {
+/**
+ * `hit` is `locate(source, item.anchor)` — null when the anchor is gone.
+ * `rev` is the revision the export is stamped with.
+ */
+function itemLines(item, source, round, hit, rev) {
   const showTag = item.tag !== 'keep';
   const resolved = item.status === 'addressed' || item.status === 'violated';
   const at = resolved
@@ -61,8 +64,15 @@ function itemLines(item, source, round, hit) {
   let head = `${item.id}${showTag ? ` ${item.tag}` : ''} ${lineRef(at)} ${anchorText(item.anchor, source)}`;
   if (item.replace) head += ` => "${esc(item.replace)}"`;
   if (item.carried > 0) head += ` (carried: unchanged since round ${round - item.carried})`;
+  // The quote of a violated item is gone by definition, so say what stands in
+  // its place — without it, L is the agent's only locator.
+  if (item.status === 'violated' && item.replacedBy)
+    head += ` (now "${quoteText(item.replacedBy)}")`;
   if (item.status === 'addressed' && item.resolvedRev != null) {
-    head += ` (addressed in rev ${item.resolvedRev})`;
+    // `linesRev` is the revision triage last pinned these lines against; when
+    // it isn't the current one, L is older than the header promises.
+    const stale = item.linesRev != null && item.linesRev !== rev;
+    head += ` (addressed in rev ${item.resolvedRev}${stale ? `; L as of rev ${item.linesRev}` : ''})`;
   }
   if (!hit && !resolved) head += ' (anchor not found in current source)';
   const lines = [head];
@@ -108,7 +118,7 @@ export function formatFeedback(comments, source, meta, opts = {}) {
     any = true;
     out.push('', title);
     for (const item of [...list].sort(byPosition))
-      out.push(...itemLines(item, source, round, hits.get(item)));
+      out.push(...itemLines(item, source, round, hits.get(item), meta.rev));
   }
   const general = items.filter((i) => i.tag === 'general' && i.status === 'open' && i.note);
   if (general.length) {
@@ -219,7 +229,8 @@ export function formatCriticMarkup(comments, source) {
   const violatedHead = violated
     .map((v) => {
       const ln = (v.resolvedLines || v.anchor.lines)[0];
-      return `{>>${v.id} ${v.tag} VIOLATED — restore exactly: "${neutralizeCm(v.anchor.quote)}" (near L${ln})<<}\n`;
+      const now = v.replacedBy ? ` — now "${neutralizeCm(v.replacedBy)}"` : '';
+      return `{>>${v.id} ${v.tag} VIOLATED — restore exactly: "${neutralizeCm(v.anchor.quote)}" (near L${ln})${now}<<}\n`;
     })
     .join('');
 

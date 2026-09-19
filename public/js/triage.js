@@ -342,7 +342,37 @@ function withoutResolution(item) {
   delete rest.replacedBy;
   delete rest.resolvedLines;
   delete rest.resolvedRev;
+  delete rest.linesRev;
   return rest;
+}
+
+/**
+ * Fields that move a RESOLVED item's `resolvedLines` onto the revision that
+ * just landed, or null when there is no honest new position to report (the
+ * old lines then stay, with a stale `linesRev` the export can flag).
+ *
+ * The export's legend promises "L = line @ rev N", and a resolved item has no
+ * live anchor to follow — its quote is gone by definition — so the only
+ * locator an agent has is the line. Follow the replacement text first (it is
+ * what sits there now); for an item still being re-decided (a keep that stays
+ * violated), fall back to re-running `replacedSpan` against the new source,
+ * which also refreshes `replacedBy`.
+ * @param {boolean} rerunSpan whether the `replacedSpan` fallback is allowed
+ */
+function repin(newSource, newStarts, item, anchor, newRev, rerunSpan) {
+  const from = (item.resolvedLines || anchor.lines)[0];
+  if (item.replacedBy) {
+    const at = nearest(newStarts, findAll(newSource, item.replacedBy), from);
+    if (at !== -1) {
+      return {
+        resolvedLines: [lineOf(newStarts, at), lineOf(newStarts, at + item.replacedBy.length - 1)],
+        linesRev: newRev,
+      };
+    }
+  }
+  if (!rerunSpan || anchor.block || anchor.approx) return null;
+  const span = replacedSpan(newSource, anchor, newStarts);
+  return span ? { replacedBy: span.text, resolvedLines: span.lines, linesRev: newRev } : null;
 }
 
 /**
@@ -376,7 +406,13 @@ export function triage(comments, oldSource, newSource, newRev) {
   const hadWork = comments.items.some((i) => i.status === 'open' || i.status === 'violated');
 
   const items = comments.items.map((item) => {
-    if (!item.anchor || item.status === 'addressed') return { ...item, rev: newRev };
+    if (!item.anchor) return { ...item, rev: newRev };
+    if (item.status === 'addressed') {
+      // Status is settled; only the reported position is refreshed, so the
+      // ADDRESSED section keeps pointing at the right place.
+      const moved = repin(newSource, newStarts, item, item.anchor, newRev, false);
+      return { ...item, ...moved, rev: newRev };
+    }
     const found = follow(oldSource, newSource, item, newStarts, strippedRef);
 
     if (found) {
@@ -396,7 +432,8 @@ export function triage(comments, oldSource, newSource, newRev) {
 
     if (item.status === 'violated') {
       summary.violated++;
-      return { ...item, rev: newRev };
+      const moved = repin(newSource, newStarts, item, item.anchor, newRev, true);
+      return { ...item, ...moved, rev: newRev };
     }
     if (item.tag === 'q') {
       return { ...item, anchor: linesBlock(newStarts.length, item.anchor.lines), rev: newRev };
@@ -409,6 +446,7 @@ export function triage(comments, oldSource, newSource, newRev) {
       ...item,
       rev: newRev,
       resolvedRev: newRev,
+      linesRev: newRev,
       resolvedLines: span ? span.lines : clampLines(newStarts.length, item.anchor.lines),
       ...(span ? { replacedBy: span.text } : {}),
     };

@@ -407,6 +407,67 @@ describe('triage — R1 replacedSpan context fallback (32 -> 16 -> 8 chars)', ()
   });
 });
 
+describe('triage — I3 re-pinning resolved lines across later revisions', () => {
+  const keep = () => item('k1', 'keep', exact([12, 12], 'p95 under 200 ms'), { note: '' });
+  const v2 = V1.replace('200 ms', '250 ms');
+  const violated = () => triage(base([keep()]), V1, v2, 1);
+
+  it('a still-violated keep follows its replacement text to the new lines', () => {
+    const first = violated();
+    expect(byId(first, 'k1')).toMatchObject({
+      resolvedLines: [12, 12],
+      replacedBy: 'p95 under 250 ms',
+      linesRev: 1,
+    });
+    const shifted = 'a\nb\nc\nd\ne\nf\n' + v2;
+    const second = triage(first.comments, v2, shifted, 2);
+    expect(byId(second, 'k1')).toMatchObject({
+      status: 'violated',
+      resolvedLines: [18, 18],
+      replacedBy: 'p95 under 250 ms',
+      linesRev: 2,
+    });
+  });
+
+  it('re-runs replacedSpan when the replacement itself was edited again', () => {
+    const first = violated();
+    const third = V1.replace('200 ms', '300 ms');
+    const second = triage(first.comments, v2, third, 2);
+    expect(byId(second, 'k1')).toMatchObject({
+      status: 'violated',
+      replacedBy: 'p95 under 300 ms',
+      resolvedLines: [12, 12],
+      linesRev: 2,
+    });
+  });
+
+  it('shifts nothing when neither the replacement nor its context can be pinned', () => {
+    const first = violated();
+    const unrelated = 'Nothing alike at all.\nSecond line.';
+    const second = triage(first.comments, v2, unrelated, 2);
+    expect(byId(second, 'k1')).toMatchObject({
+      status: 'violated',
+      resolvedLines: [12, 12],
+      linesRev: 1, // stale on purpose: no honest new position to report
+    });
+  });
+
+  it('re-pins an addressed item without changing its status', () => {
+    const c = base([item('c1', 'fix', exact([12, 12], 'soon'))]);
+    const v2b = V1.replace('We launch soon.', 'We launch on 1 March.');
+    const first = triage(c, V1, v2b, 1);
+    expect(byId(first, 'c1')).toMatchObject({ status: 'addressed', replacedBy: 'on 1 March' });
+    const second = triage(first.comments, v2b, 'x\ny\n' + v2b, 2);
+    expect(byId(second, 'c1')).toMatchObject({
+      status: 'addressed',
+      resolvedRev: 1,
+      resolvedLines: [14, 14],
+      linesRev: 2,
+      rev: 2,
+    });
+  });
+});
+
 describe('triage — I1/I2 duplicated text needs surviving context', () => {
   const DUP = [
     '# Cadence', // 1

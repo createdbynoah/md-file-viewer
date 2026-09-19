@@ -175,6 +175,67 @@ describe('triaged items', () => {
     expect(out).toContain('ADDRESSED\nc3 fix L3 "gone text" (addressed in rev 4)');
     expect(out).not.toContain('anchor not found');
   });
+
+  it('prints the current text of a violated item when triage knows it', () => {
+    const out = fmt([
+      item({
+        id: 'k2',
+        tag: 'keep',
+        status: 'violated',
+        anchor: { ...gone, quote: 'p95 under 200 ms' },
+        resolvedLines: [4, 4],
+        replacedBy: 'p95 under 250 ms',
+      }),
+    ]);
+    expect(out).toContain('k2 L4 "p95 under 200 ms" (now "p95 under 250 ms")');
+  });
+
+  it('omits the now-clause when the replacement is unknown or empty', () => {
+    const out = fmt([
+      item({ id: 'k2', tag: 'keep', status: 'violated', anchor: gone, resolvedLines: [1, 1] }),
+      item({
+        id: 'k3',
+        tag: 'keep',
+        status: 'violated',
+        anchor: gone,
+        resolvedLines: [2, 2],
+        replacedBy: '',
+      }),
+    ]);
+    expect(out).not.toContain('(now ');
+  });
+
+  it('elides and escapes a long replacement like any other quoted text', () => {
+    const long = 'one two three four five six seven eight nine ten eleven twelve thirteen';
+    const out = fmt([
+      item({
+        id: 'k2',
+        tag: 'keep',
+        status: 'violated',
+        anchor: gone,
+        resolvedLines: [1, 1],
+        replacedBy: long,
+      }),
+    ]);
+    expect(out).toContain('(now "one two three four five … nine ten eleven twelve thirteen")');
+  });
+
+  it('flags addressed lines that could not be re-pinned in the latest triage', () => {
+    const addressed = (over) =>
+      item({
+        id: 'c3',
+        status: 'addressed',
+        anchor: gone,
+        resolvedLines: [3, 3],
+        resolvedRev: 2,
+        ...over,
+      });
+    const stale = fmt([addressed({ linesRev: 2 })], { includeAddressed: true });
+    expect(stale).toContain('c3 fix L3 "gone text" (addressed in rev 2; L as of rev 2)');
+    const fresh = fmt([addressed({ linesRev: 3 })], { includeAddressed: true });
+    expect(fresh).toContain('c3 fix L3 "gone text" (addressed in rev 2)');
+    expect(fresh).not.toContain('L as of');
+  });
 });
 
 describe('formatCriticMarkup', () => {
@@ -397,6 +458,28 @@ describe('formatCriticMarkup', () => {
         SRC
     );
     expect(out).not.toContain('c9');
+  });
+
+  it('adds the current text to the violated header line when triage knows it', () => {
+    const out = formatCriticMarkup(
+      {
+        round: 1,
+        items: [
+          item({
+            id: 'k2',
+            tag: 'keep',
+            status: 'violated',
+            anchor: { quote: 'gone text', approx: false, prefix: '', suffix: '', lines: [1, 1] },
+            resolvedLines: [2, 2],
+            replacedBy: 'new {>> text',
+          }),
+        ],
+      },
+      SRC
+    );
+    expect(out.split('\n')[0]).toBe(
+      '{>>k2 keep VIOLATED — restore exactly: "gone text" (near L2) — now "new { >> text"<<}'
+    );
   });
 
   it('falls back to the anchor line when a violated item has no resolvedLines', () => {
