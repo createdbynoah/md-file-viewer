@@ -8,20 +8,23 @@ const CONTEXT_CHARS = 16;
 
 const esc = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
 const flat = (s) => s.replace(/\s+/g, ' ');
-const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
 
-// CriticMarkup delimiters that user/derived text must never be allowed to
-// smuggle into a `{>>...<<}` comment — either escaping it early (a note
-// containing a literal "<<}") or corrupting a highlight span. Break each one
-// with an inserted space; never applied to markdown syntax outside comments.
-const CM_DELIMS = ['<<}', '{>>', '==}', '{=='];
-const hasCmDelimiter = (s) => CM_DELIMS.some((d) => s.includes(d));
+// The single helper for EVERY piece of user/derived text placed inside a
+// CriticMarkup `{>>...<<}` comment (note, replacement, block label,
+// degraded/approx quote, violated quote) — so no call site can forget either
+// half: break the four CriticMarkup delimiters that would otherwise escape
+// the comment or corrupt a highlight span, and flatten to one line (a raw
+// newline inside a comment is just as unsafe as a literal delimiter).
+// `formatFeedback` keeps its own `esc` behavior (backslash-n) untouched.
 const neutralizeCm = (s) =>
   s
     .replace(/<<\}/g, '<< }')
     .replace(/\{>>/g, '{ >>')
     .replace(/==\}/g, '== }')
-    .replace(/\{==/g, '{ ==');
+    .replace(/\{==/g, '{ ==')
+    .replace(/\s+/g, ' ')
+    .trim();
+const hasCmDelimiter = (s) => ['<<}', '{>>', '==}', '{=='].some((d) => s.includes(d));
 
 function quoteText(quote) {
   const words = quote.trim().split(/\s+/);
@@ -133,11 +136,11 @@ export function formatCriticMarkup(comments, source) {
   const open = comments.items.filter((i) => i.status === 'open');
 
   const label = (item) =>
-    `${item.id} ${item.tag}${item.replace ? ` => "${esc(neutralizeCm(item.replace))}"` : ''}`;
-  const noteSuffix = (item) => (item.note ? `: ${oneLine(neutralizeCm(item.note))}` : '');
+    `${item.id} ${item.tag}${item.replace ? ` => "${neutralizeCm(item.replace)}"` : ''}`;
+  const noteSuffix = (item) => (item.note ? `: ${neutralizeCm(item.note)}` : '');
   const comment = (item) => `{>>${label(item)}${noteSuffix(item)}<<}`;
   const noteOnly = (item, what) => `{>>${label(item)}${what}${noteSuffix(item)}<<}`;
-  const quoted = (text) => ` ~"${oneLine(neutralizeCm(text))}"`;
+  const quoted = (text) => ` ~"${neutralizeCm(text)}"`;
 
   const lineStart = (line) => {
     let at = 0;
@@ -159,12 +162,14 @@ export function formatCriticMarkup(comments, source) {
       const what = item.anchor.block
         ? ` [${neutralizeCm(item.anchor.block.label)}]`
         : quoted(item.anchor.quote);
-      pushEvent(lineStart(hit.lines[0]), 1, item, noteOnly(item, what));
+      // Order 0: a line-start/point note must precede a highlight opening
+      // (order 1) at the same offset, never land inside it.
+      pushEvent(lineStart(hit.lines[0]), 0, item, noteOnly(item, what));
       continue;
     }
     const quote = source.slice(hit.start, hit.end);
     if (hasCmDelimiter(quote)) {
-      pushEvent(hit.start, 1, item, noteOnly(item, quoted(quote)));
+      pushEvent(hit.start, 0, item, noteOnly(item, quoted(quote)));
       continue;
     }
     exact.push({ item, start: hit.start, end: hit.end });
@@ -188,7 +193,7 @@ export function formatCriticMarkup(comments, source) {
     groups.push({ start: cand.start, end: cand.end, comments: [cand.item], degraded: [] });
   }
   for (const g of groups) {
-    pushEvent(g.start, 0, g.comments[0], '{==');
+    pushEvent(g.start, 1, g.comments[0], '{==');
     const trailing = g.degraded
       .map((d) => noteOnly(d.item, quoted(source.slice(d.start, d.end))))
       .join('');
@@ -206,9 +211,7 @@ export function formatCriticMarkup(comments, source) {
   const out = parts.join('');
 
   const general = open.filter((i) => i.tag === 'general' && i.note);
-  const generalHead = general
-    .map((g) => `{>>general: ${oneLine(neutralizeCm(g.note))}<<}\n`)
-    .join('');
+  const generalHead = general.map((g) => `{>>general: ${neutralizeCm(g.note)}<<}\n`).join('');
 
   // Their original anchor is gone by definition, so print the recorded quote
   // (not a resolved location) as an instruction to restore it.
@@ -216,7 +219,7 @@ export function formatCriticMarkup(comments, source) {
   const violatedHead = violated
     .map((v) => {
       const ln = (v.resolvedLines || v.anchor.lines)[0];
-      return `{>>${v.id} ${v.tag} VIOLATED — restore exactly: "${oneLine(neutralizeCm(v.anchor.quote))}" (near L${ln})<<}\n`;
+      return `{>>${v.id} ${v.tag} VIOLATED — restore exactly: "${neutralizeCm(v.anchor.quote)}" (near L${ln})<<}\n`;
     })
     .join('');
 

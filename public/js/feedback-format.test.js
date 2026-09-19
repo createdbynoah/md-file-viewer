@@ -416,4 +416,64 @@ describe('formatCriticMarkup', () => {
     );
     expect(out).toContain('(near L5)<<}');
   });
+
+  it('flattens a newline in a block label and a literal replacement (G1)', () => {
+    const out = formatCriticMarkup(
+      {
+        round: 1,
+        items: [
+          item({
+            id: 'c1',
+            tag: 'q',
+            note: 'Why?',
+            anchor: {
+              quote: '',
+              approx: false,
+              prefix: '',
+              suffix: '',
+              lines: [2, 2],
+              block: { kind: 'paragraph', label: 'paragraph "line one\nline two"' },
+            },
+          }),
+          item({ id: 'c2', replace: 'a\nb' }),
+        ],
+      },
+      SRC
+    );
+    const c1Comment = out.match(/\{>>c1[^]*?<<\}/)[0];
+    expect(c1Comment).not.toContain('\n');
+    expect(out).toContain('{==soon==}{>>c2 fix => "a b"<<}');
+  });
+
+  it('emits a line-start note before a highlight opening at the same offset (G2)', () => {
+    const note = item({
+      id: 'c2',
+      tag: 'q',
+      note: 'Which?',
+      anchor: {
+        quote: '',
+        approx: false,
+        prefix: '',
+        suffix: '',
+        lines: [3, 3],
+        block: { kind: 'paragraph', label: 'para' },
+      },
+    });
+    const exactItem = item({
+      id: 'c1',
+      tag: 'fix',
+      note: 'Fix',
+      anchor: { quote: 'Ship', approx: false, prefix: '', suffix: ' soon.', lines: [3, 3] },
+    });
+    const out = formatCriticMarkup({ round: 1, items: [exactItem, note] }, SRC);
+    expect(out).toBe(
+      'Tail latency matters.\nMedian latency does not.\n' +
+        '{>>c2 q [para]: Which?<<}{==Ship==}{>>c1 fix: Fix<<} soon.'
+    );
+    const stripped = out
+      .replace(/\{>>[^]*?<<\}/g, '')
+      .replace(/\{==/g, '')
+      .replace(/==\}/g, '');
+    expect(stripped).toBe(SRC);
+  });
 });
