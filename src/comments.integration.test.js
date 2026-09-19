@@ -220,10 +220,17 @@ describe('comments', () => {
     expect(after.round).toBe(2);
     expect(after.lastTriage.rev).toBe(1);
     const [c1, k2, c3] = after.items;
-    // The neighbouring sentence changed too, so c1's 32-char suffix did not
-    // survive and no replacement text could be pinned down.
-    expect(c1).toMatchObject({ status: 'addressed', resolvedRev: 1, rev: 1 });
-    expect(c1.replacedBy).toBeUndefined();
+    // The neighbouring sentence changed too, so c1's full 32-char suffix
+    // didn't survive — but replacedSpan() falls back to a shorter (8-char)
+    // surviving slice right next to the quote, so the replacement still
+    // gets pinned down.
+    expect(c1).toMatchObject({
+      status: 'addressed',
+      resolvedRev: 1,
+      rev: 1,
+      replacedBy: 'on 1 March',
+      resolvedLines: [3, 3],
+    });
     expect(k2).toMatchObject({ status: 'violated', rev: 1 });
     expect(c3).toMatchObject({ status: 'open', carried: 1, rev: 1 });
   });

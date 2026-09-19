@@ -80,45 +80,35 @@ function matchesFor(text, quote) {
   return [...text.matchAll(wsRegex(quote))];
 }
 
-/**
- * The new text sitting between an anchor's surviving prefix and suffix, or
- * null when a side can't be pinned down in `newSource`. The quote itself is
- * captured whitespace-trimmed, so a boundary space next to it lives in
- * `prefix`/`suffix`; search on the trimmed boundary (nearest the old line
- * for the prefix). `lines` are measured from the TRIMMED replacement text
- * (its first to its last non-whitespace character), not from the raw
- * start/end — the raw span can include boundary newlines from the
- * prefix/suffix seam (e.g. a paragraph break) that would otherwise inflate
- * the reported range past where the replacement text actually sits. A
- * genuine full deletion still yields `text: ''` with both `lines` entries
- * set to the (single, valid) line the deletion sits on.
- * @param {number[]} [starts] a `lineTable(newSource)` result, when the
- *   caller already has one.
- */
-export function replacedSpan(newSource, anchor, starts = lineTable(newSource)) {
-  if (!anchor.prefix && !anchor.suffix) return null;
+// Context lengths tried, longest first, when pinning a replacement span — a
+// neighboring edit (on the same or an adjacent line) can fall inside the
+// full 32-char context without touching the quote itself, so a shorter,
+// closer-to-the-quote slice is retried before giving up. The paired
+// (prefix, suffix) lengths are tried together, never mixed.
+const SPAN_CONTEXT_TIERS = [Infinity, 16, 8];
 
-  const prefixTrimmed = anchor.prefix.replace(/\s+$/, '');
+/** Last (for the prefix) or first (for the suffix) `len` chars of `trimmed`, or all of it when shorter. */
+function contextTier(trimmed, len, fromEnd) {
+  if (trimmed.length <= len) return trimmed;
+  return fromEnd ? trimmed.slice(-len) : trimmed.slice(0, len);
+}
+
+/** One (prefix, suffix) tier attempt for `replacedSpan`; see its doc comment. */
+function pinSpan(newSource, anchor, starts, prefix, suffix) {
   let start;
   if (anchor.prefix === '') {
     start = 0;
-  } else if (!prefixTrimmed) {
-    // prefix was present but whitespace-only: no real content to pin against.
-    return null;
   } else {
-    const at = nearest(starts, findAll(newSource, prefixTrimmed), anchor.lines[0]);
+    const at = nearest(starts, findAll(newSource, prefix), anchor.lines[0]);
     if (at === -1) return null;
-    start = at + prefixTrimmed.length;
+    start = at + prefix.length;
   }
 
-  const suffixTrimmed = anchor.suffix.replace(/^\s+/, '');
   let end;
   if (anchor.suffix === '') {
     end = newSource.length;
-  } else if (!suffixTrimmed) {
-    return null;
   } else {
-    const idx = newSource.indexOf(suffixTrimmed, start);
+    const idx = newSource.indexOf(suffix, start);
     if (idx === -1) return null;
     end = idx;
   }
@@ -139,6 +129,69 @@ export function replacedSpan(newSource, anchor, starts = lineTable(newSource)) {
     text,
     lines: [lineOf(starts, textStart), lineOf(starts, Math.max(textStart, textEnd - 1))],
   };
+}
+
+/**
+ * The new text sitting between an anchor's surviving prefix and suffix, or
+ * null when neither side can be pinned down in `newSource` at any context
+ * length. The quote itself is captured whitespace-trimmed, so a boundary
+ * space next to it lives in `prefix`/`suffix`; search on the trimmed
+ * boundary (nearest the old line for the prefix). A side that was
+ * ORIGINALLY empty (the quote sat at a document boundary) always stays that
+ * boundary — it is never searched for, at any tier.
+ *
+ * A neighboring edit can land inside the full 32-char context without
+ * touching the quote itself (an edit on the same line just past the quote,
+ * or on the very next line, both fall inside a short quote's captured
+ * suffix). So this retries with a shorter context — keeping the END of the
+ * prefix and the START of the suffix, closest to the quote — before giving
+ * up: full context, then the last/first 16 chars, then 8. `contextTier`
+ * already no-ops when a side is shorter than the tier's length, so a short
+ * side is naturally reused unchanged across tiers (never padded, never
+ * searched-for twice with identical input — tiers whose (prefix, suffix)
+ * pair is unchanged from the previous attempt are skipped). This only
+ * changes what a FOUND replacement is reported as; it never changes whether
+ * an item counts as found vs. gone (that's decided by `follow`/`locate`
+ * elsewhere in this module, which never call this at a shortened tier).
+ *
+ * Shortening trades precision for reach: with a short, repeated substring
+ * (e.g. an 8-char tier that lands on common text), the first matching
+ * occurrence AFTER the prefix wins even if a "more correct" one sits
+ * further away — the existing, documented behavior of a literal
+ * `indexOf`/`findAll` search, just reachable at a shorter tier now.
+ *
+ * `lines` are measured from the TRIMMED replacement text (its first to its
+ * last non-whitespace character), not from the raw start/end — the raw span
+ * can include boundary newlines from the prefix/suffix seam (e.g. a
+ * paragraph break) that would otherwise inflate the reported range past
+ * where the replacement text actually sits. A genuine full deletion still
+ * yields `text: ''` with both `lines` entries set to the (single, valid)
+ * line the deletion sits on.
+ * @param {number[]} [starts] a `lineTable(newSource)` result, when the
+ *   caller already has one.
+ */
+export function replacedSpan(newSource, anchor, starts = lineTable(newSource)) {
+  if (!anchor.prefix && !anchor.suffix) return null;
+
+  const prefixTrimmed = anchor.prefix.replace(/\s+$/, '');
+  const suffixTrimmed = anchor.suffix.replace(/^\s+/, '');
+  // A side that was present but whitespace-only has no real content to pin
+  // against, at any tier — the whole call is doomed.
+  if (anchor.prefix !== '' && !prefixTrimmed) return null;
+  if (anchor.suffix !== '' && !suffixTrimmed) return null;
+
+  let lastPrefix = null;
+  let lastSuffix = null;
+  for (const len of SPAN_CONTEXT_TIERS) {
+    const prefix = anchor.prefix === '' ? '' : contextTier(prefixTrimmed, len, true);
+    const suffix = anchor.suffix === '' ? '' : contextTier(suffixTrimmed, len, false);
+    if (prefix === lastPrefix && suffix === lastSuffix) continue; // identical to an attempt already made
+    lastPrefix = prefix;
+    lastSuffix = suffix;
+    const span = pinSpan(newSource, anchor, starts, prefix, suffix);
+    if (span) return span;
+  }
+  return null;
 }
 
 /**

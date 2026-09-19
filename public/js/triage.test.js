@@ -341,6 +341,72 @@ describe('triage — N3 replacedSpan lines from the trimmed span', () => {
   });
 });
 
+describe('triage — R1 replacedSpan context fallback (32 -> 16 -> 8 chars)', () => {
+  it('(a) seed situation: quote replaced on its own line AND a neighboring edit sits inside the 32-char suffix — still pins the replacement', () => {
+    const OLD = [
+      '# Launch brief',
+      '',
+      'We will ship to all customers in a single release.',
+      'Latency target: p95 under 200 ms.',
+      'Rollback is a one-line flag flip.',
+      '',
+      'The beta ends soon.',
+      '',
+    ].join('\n');
+    const NEW = OLD.replace(
+      'all customers in a single release',
+      'customers in three stages'
+    ).replace('200 ms', '250 ms');
+    const anchor = captureAnchor(OLD, [3, 3], 'all customers in a single release');
+    expect(replacedSpan(NEW, anchor)).toEqual({
+      text: 'customers in three stages',
+      lines: [3, 3],
+    });
+  });
+
+  it('(b) edit inside the 32-char PREFIX on the previous line — falls back to the last 8 chars and still pins', () => {
+    const HEAD = 'A'.repeat(24);
+    const TAIL_CTX = 'zzzzzzzz'; // 8 chars directly touching the quote; the only part that survives
+    const OLD = `${HEAD}${TAIL_CTX}TARGET unchanged-suffix`;
+    const NEW = `${'B'.repeat(24)}${TAIL_CTX}REPLACEMENT unchanged-suffix`;
+    const anchor = captureAnchor(OLD, [1, 1], 'TARGET');
+    // Sanity: the full 32-char prefix (HEAD + TAIL_CTX) must be what got captured.
+    expect(anchor.prefix).toBe(HEAD + TAIL_CTX);
+    // Full (32) and 16-char tiers still reach into the changed HEAD and fail;
+    // only the last-8 tier (pure TAIL_CTX) survives.
+    expect(replacedSpan(NEW, anchor)).toEqual({
+      text: 'REPLACEMENT',
+      lines: [1, 1],
+    });
+  });
+
+  it('(c) both neighbours rewritten entirely, no 8-char context survives — null', () => {
+    const OLD = `${'A'.repeat(24)}zzzzzzzzTARGET unchanged-suffix`;
+    const NEW = `${'B'.repeat(24)}yyyyyyyyREPLACEMENT totally-different-tail`;
+    const anchor = captureAnchor(OLD, [1, 1], 'TARGET');
+    expect(replacedSpan(NEW, anchor)).toBeNull();
+  });
+
+  it('(d) documented behavior: in a repetitive document, a decoy 8-char suffix match closer to the edit wins over the real (farther) one, as long as it is within the 2000-char cap', () => {
+    const PREFIX = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabc'; // unique chars, no internal repeats
+    const TAG8 = 'TAGXTAGX';
+    const OLD = `${PREFIX}TARGET${TAG8}${'X'.repeat(24)}-END`;
+    const NEW = `${PREFIX}REPLACEMENT ${TAG8} decoy junk here not real ${TAG8}${'Y'.repeat(24)}-END`;
+    const anchor = captureAnchor(OLD, [1, 1], 'TARGET');
+    // Full (32) and 16-char suffix tiers reach past TAG8 into content that
+    // changed (X's -> Y's) and fail; the 8-char tier (TAG8 alone) succeeds,
+    // but TAG8 also occurs as a decoy right after the edit, closer than the
+    // real (unedited) occurrence further down — `indexOf` finds the decoy
+    // first, so the reported replacement stops there. This is the existing,
+    // intentional "nearest following occurrence" behavior, just reachable at
+    // a shorter tier now — not a new bug.
+    expect(replacedSpan(NEW, anchor)).toEqual({
+      text: 'REPLACEMENT',
+      lines: [1, 1],
+    });
+  });
+});
+
 describe('triage — F1 performance at Worker scale', () => {
   it('triages 400 items against a ~1 MB repetitive note in well under 5s', () => {
     const N = 15000;
