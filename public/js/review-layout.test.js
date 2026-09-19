@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { layoutFor, keyboardInset, summarize, summaryLabel } from './review-layout.js';
+import { layoutFor, keyboardInset, summarize, summaryLabel, triageLabel } from './review-layout.js';
 
 describe('layoutFor', () => {
   it('uses the app breakpoints', () => {
@@ -46,12 +46,33 @@ describe('summarize / summaryLabel', () => {
     { tag: 'keep', status: 'violated' },
   ];
   it('counts open work, keeps and addressed separately', () => {
-    expect(summarize(items)).toEqual({ open: 3, keep: 1, addressed: 1 });
+    expect(summarize(items)).toEqual({ open: 3, keep: 1, addressed: 1, violated: 1 });
   });
   it('labels compactly and omits zero parts', () => {
-    expect(summaryLabel({ open: 3, keep: 1, addressed: 1 })).toBe('3 open · 1 keep');
-    expect(summaryLabel({ open: 0, keep: 2, addressed: 0 })).toBe('2 keep');
-    expect(summaryLabel({ open: 0, keep: 0, addressed: 4 })).toBe('All addressed');
-    expect(summaryLabel({ open: 0, keep: 0, addressed: 0 })).toBe('No comments yet');
+    expect(summaryLabel({ open: 3, keep: 1, addressed: 1, violated: 0 })).toBe('3 open · 1 keep');
+    expect(summaryLabel({ open: 0, keep: 2, addressed: 0, violated: 0 })).toBe('2 keep');
+    expect(summaryLabel({ open: 0, keep: 0, addressed: 4, violated: 0 })).toBe('All addressed');
+    expect(summaryLabel({ open: 0, keep: 0, addressed: 0, violated: 0 })).toBe('No comments yet');
+  });
+  it('counts violated keeps on their own and leads the label with them', () => {
+    expect(summarize(items)).toEqual({ open: 3, keep: 1, addressed: 1, violated: 1 });
+    expect(summaryLabel({ open: 3, keep: 1, addressed: 1, violated: 1 })).toBe(
+      '1 violated · 3 open · 1 keep'
+    );
+    expect(summaryLabel({ open: 3, keep: 1, addressed: 1, violated: 0 })).toBe('3 open · 1 keep');
+  });
+});
+
+describe('triageLabel', () => {
+  it('summarizes a round and omits zero parts', () => {
+    expect(
+      triageLabel({ rev: 3, round: 2, addressed: 4, carried: 1, violated: 1, restored: 0 })
+    ).toBe('Round 2: 4 addressed · 1 carried over · 1 keep violated');
+    expect(
+      triageLabel({ rev: 3, round: 3, addressed: 0, carried: 0, violated: 0, restored: 1 })
+    ).toBe('Round 3: 1 keep restored');
+    expect(
+      triageLabel({ rev: 3, round: 2, addressed: 0, carried: 0, violated: 0, restored: 0 })
+    ).toBe('Round 2: nothing changed for your comments');
   });
 });

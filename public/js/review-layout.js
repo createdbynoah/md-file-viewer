@@ -22,18 +22,30 @@ export function keyboardInset({ innerHeight, vvHeight, vvOffsetTop, scale = 1 })
 }
 
 export function summarize(items) {
-  const out = { open: 0, keep: 0, addressed: 0 };
+  const out = { open: 0, keep: 0, addressed: 0, violated: 0 };
   for (const item of items) {
     if (item.status === 'addressed') out.addressed++;
+    else if (item.status === 'violated') out.violated++;
     else if (item.status === 'open') out[item.tag === 'keep' ? 'keep' : 'open']++;
   }
   return out;
 }
 
-export function summaryLabel({ open, keep, addressed }) {
+export function summaryLabel({ open, keep, addressed, violated = 0 }) {
   const parts = [];
+  if (violated) parts.push(`${violated} violated`);
   if (open) parts.push(`${open} open`);
   if (keep) parts.push(`${keep} keep`);
   if (parts.length) return parts.join(' · ');
   return addressed ? 'All addressed' : 'No comments yet';
+}
+
+/** Banner text for the last triage, e.g. "Round 2: 4 addressed · 1 carried over". */
+export function triageLabel({ round, addressed, carried, violated, restored }) {
+  const parts = [];
+  if (addressed) parts.push(`${addressed} addressed`);
+  if (carried) parts.push(`${carried} carried over`);
+  if (violated) parts.push(`${violated} keep violated`);
+  if (restored) parts.push(`${restored} keep restored`);
+  return `Round ${round}: ${parts.length ? parts.join(' · ') : 'nothing changed for your comments'}`;
 }
