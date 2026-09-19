@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatFeedback } from './feedback-format.js';
+import { formatFeedback, formatCriticMarkup } from './feedback-format.js';
 
 const SRC = 'Tail latency matters.\nMedian latency does not.\nShip soon.';
 const item = (over) => ({
@@ -152,5 +152,69 @@ describe('formatFeedback', () => {
     );
     expect(out).toContain(`"${twelve}"`);
     expect(out).not.toContain('…');
+  });
+});
+
+describe('triaged items', () => {
+  const gone = { quote: 'gone text', approx: false, prefix: '', suffix: '', lines: [1, 1] };
+  it('prints resolved lines for violated and addressed items, without the not-found marker', () => {
+    const out = fmt(
+      [
+        item({ id: 'k2', tag: 'keep', status: 'violated', anchor: gone, resolvedLines: [2, 2] }),
+        item({
+          id: 'c3',
+          status: 'addressed',
+          anchor: gone,
+          resolvedLines: [3, 3],
+          resolvedRev: 4,
+        }),
+      ],
+      { includeAddressed: true }
+    );
+    expect(out).toContain('VIOLATED — kept text was changed; restore it\nk2 L2 "gone text"');
+    expect(out).toContain('ADDRESSED\nc3 fix L3 "gone text" (addressed in rev 4)');
+    expect(out).not.toContain('anchor not found');
+  });
+});
+
+describe('formatCriticMarkup', () => {
+  it('wraps located quotes and notes blocks and general inline, leaving the rest byte-identical', () => {
+    const out = formatCriticMarkup(
+      {
+        round: 1,
+        items: [
+          item({ id: 'c1', note: 'Give a date' }),
+          item({
+            id: 'c2',
+            tag: 'q',
+            note: 'Why?',
+            anchor: {
+              quote: '',
+              approx: false,
+              prefix: '',
+              suffix: '',
+              lines: [2, 2],
+              block: { kind: 'paragraph', label: 'paragraph "Median latency"' },
+            },
+          }),
+          { id: 'c3', tag: 'general', note: 'Too salesy', status: 'open' },
+          item({ id: 'c4', status: 'addressed' }),
+        ],
+      },
+      SRC
+    );
+    expect(out).toBe(
+      '{>>general: Too salesy<<}\n' +
+        'Tail latency matters.\n' +
+        '{>>c2 q [paragraph "Median latency"]: Why?<<}Median latency does not.\n' +
+        'Ship {==soon==}{>>c1 fix: Give a date<<}.'
+    );
+  });
+  it('carries a literal replacement and keeps notes on one line', () => {
+    const out = formatCriticMarkup(
+      { round: 1, items: [item({ id: 'c1', note: 'a\nb', replace: 'on 1 March' })] },
+      SRC
+    );
+    expect(out).toContain('{==soon==}{>>c1 fix => "on 1 March": a b<<}');
   });
 });

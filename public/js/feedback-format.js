@@ -35,11 +35,19 @@ function anchorText(anchor, source) {
 /** `hit` is `locate(source, item.anchor)` — null when the anchor is gone. */
 function itemLines(item, source, round, hit) {
   const showTag = item.tag !== 'keep';
-  const at = hit ? hit.lines : item.anchor.lines;
+  const resolved = item.status === 'addressed' || item.status === 'violated';
+  const at = resolved
+    ? item.resolvedLines || item.anchor.lines
+    : hit
+      ? hit.lines
+      : item.anchor.lines;
   let head = `${item.id}${showTag ? ` ${item.tag}` : ''} ${lineRef(at)} ${anchorText(item.anchor, source)}`;
   if (item.replace) head += ` => "${esc(item.replace)}"`;
   if (item.carried > 0) head += ` (carried: unchanged since round ${round - item.carried})`;
-  if (!hit) head += ' (anchor not found in current source)';
+  if (item.status === 'addressed' && item.resolvedRev != null) {
+    head += ` (addressed in rev ${item.resolvedRev})`;
+  }
+  if (!hit && !resolved) head += ' (anchor not found in current source)';
   const lines = [head];
   if (item.note && !item.replace) lines.push(...item.note.split('\n').map((l) => `  ${l}`));
   return lines;
@@ -63,7 +71,10 @@ export function formatFeedback(comments, source, meta, opts = {}) {
   // The legend promises "L = line @ rev {current}", so resolve every anchor
   // against the source once and print (and sort by) where it sits NOW.
   const hits = new Map(anchored.map((i) => [i, locate(source, i.anchor)]));
-  const lineOf = (i) => (hits.get(i) || i.anchor).lines[0];
+  const lineOf = (i) =>
+    (i.status === 'addressed' || i.status === 'violated'
+      ? i.resolvedLines || i.anchor.lines
+      : (hits.get(i) || i.anchor).lines)[0];
   const byPosition = (a, b) => lineOf(a) - lineOf(b) || a.id.localeCompare(b.id);
   const sections = [
     [
@@ -90,4 +101,42 @@ export function formatFeedback(comments, source, meta, opts = {}) {
   }
   if (!any) out.push('', '(no open feedback)');
   return out.join('\n');
+}
+
+/**
+ * The full source with open comments embedded as CriticMarkup, for an agent
+ * that has no copy of the document. Costs the whole document in tokens.
+ */
+export function formatCriticMarkup(comments, source) {
+  const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
+  const open = comments.items.filter((i) => i.status === 'open');
+  const inserts = []; // { at, text }, applied from the end so offsets stay valid
+  const lineStart = (line) => {
+    let at = 0;
+    for (let n = 1; n < line; n++) at = source.indexOf('\n', at) + 1;
+    return at;
+  };
+  for (const item of open) {
+    if (!item.anchor) continue;
+    const hit = locate(source, item.anchor);
+    if (!hit) continue;
+    const label = `${item.id} ${item.tag}${item.replace ? ` => "${esc(item.replace)}"` : ''}`;
+    const note = item.note ? `: ${oneLine(item.note)}` : '';
+    if (hit.start == null) {
+      const what = item.anchor.block
+        ? ` [${item.anchor.block.label}]`
+        : ` ~"${oneLine(item.anchor.quote)}"`;
+      inserts.push({ at: lineStart(hit.lines[0]), text: `{>>${label}${what}${note}<<}` });
+    } else {
+      inserts.push({ at: hit.end, text: `==}{>>${label}${note}<<}` });
+      inserts.push({ at: hit.start, text: '{==' });
+    }
+  }
+  let out = source;
+  for (const ins of inserts.sort((a, b) => b.at - a.at)) {
+    out = out.slice(0, ins.at) + ins.text + out.slice(ins.at);
+  }
+  const general = open.filter((i) => i.tag === 'general' && i.note);
+  const head = general.map((g) => `{>>general: ${oneLine(g.note)}<<}\n`).join('');
+  return head + out;
 }
