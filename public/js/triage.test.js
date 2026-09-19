@@ -540,6 +540,70 @@ describe('triage — I1/I2 duplicated text needs surviving context', () => {
   });
 });
 
+describe('triage — M2 anchors already stale before this revision', () => {
+  const stale = () => ({
+    quote: 'never in this note',
+    approx: false,
+    prefix: '',
+    suffix: '',
+    lines: [3, 3],
+  });
+  it('an open fix that could not be located in the OLD source either stays open', () => {
+    const r = triage(base([item('s1', 'fix', stale())]), V1, V1 + '\nmore', 1);
+    expect(byId(r, 's1')).toMatchObject({ status: 'open', carried: 0, rev: 1 });
+    expect(byId(r, 's1').anchor).toEqual(stale());
+    expect(byId(r, 's1').replacedBy).toBeUndefined();
+    expect(byId(r, 's1').resolvedRev).toBeUndefined();
+    expect(r.summary.addressed).toBe(0);
+  });
+  it('the same for a cut', () => {
+    const r = triage(base([item('s2', 'cut', stale(), { note: '' })]), V1, V1 + '\nmore', 1);
+    expect(byId(r, 's2')).toMatchObject({ status: 'open', carried: 0 });
+  });
+});
+
+describe('triage — M3 block/approx anchors resolved against a stale base', () => {
+  // `rev` is the revision the anchor was last resolved against. When it is not
+  // the revision just before this one, a previous triage failed and oldSource
+  // is NOT what these lines refer to — comparing block text sliced from it
+  // would be comparing the wrong paragraph.
+  it('keeps a block anchor open at its clamped lines, without carrying', () => {
+    const b = item('m3', 'fix', blockAnchor([8, 10], 'table', 'table under "Costs"'), { rev: 0 });
+    const r = triage(base([b]), V1, V1.replace('| Workers | $5 |', '| Workers | $6 |'), 3);
+    expect(byId(r, 'm3')).toMatchObject({ status: 'open', carried: 0, rev: 3 });
+    expect(byId(r, 'm3').anchor.lines).toEqual([8, 10]);
+  });
+  it('keeps an approx anchor open, clamped into a shrunken note', () => {
+    const approx = captureAnchor(V1, [4, 4], 'a one-line flag');
+    const r = triage(base([item('m3b', 'fix', approx, { rev: 0 })]), V1, 'one\ntwo', 3);
+    expect(byId(r, 'm3b')).toMatchObject({ status: 'open', carried: 0 });
+    expect(byId(r, 'm3b').anchor.lines).toEqual([2, 2]);
+  });
+  it('still triages normally when the base IS the previous revision', () => {
+    const b = item('m3c', 'fix', blockAnchor([8, 10], 'table', 'table under "Costs"'), { rev: 2 });
+    const r = triage(base([b]), V1, V1.replace('| Workers | $5 |', '| Workers | $6 |'), 3);
+    expect(byId(r, 'm3c').status).toBe('addressed');
+  });
+});
+
+describe('triage — M6 a deleted paragraph resolves to where it was', () => {
+  const SRC = 'A para.\n\nTARGET para.\n\nB para.';
+  it('reports the following line, not the prefix line', () => {
+    const anchor = captureAnchor(SRC, [3, 3], 'TARGET para.');
+    const r = triage(base([item('x1', 'cut', anchor, { note: '' })]), SRC, 'A para.\n\nB para.', 1);
+    expect(byId(r, 'x1')).toMatchObject({
+      status: 'addressed',
+      replacedBy: '',
+      resolvedLines: [3, 3],
+    });
+  });
+  it('falls back to the line the deletion sits on when nothing follows it', () => {
+    const tail = 'A para.\n\nTARGET para.';
+    const anchor = captureAnchor(tail, [3, 3], 'TARGET para.');
+    expect(replacedSpan('A para.\n', anchor)).toEqual({ text: '', lines: [1, 1] });
+  });
+});
+
 describe('triage — I4 CRLF sources compare as LF', () => {
   const LF = [
     '# Title', // 1

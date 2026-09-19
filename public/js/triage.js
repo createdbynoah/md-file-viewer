@@ -118,7 +118,17 @@ function pinSpan(newSource, anchor, starts, prefix, suffix) {
   const raw = newSource.slice(start, end);
   const text = raw.trim();
   if (text === '') {
-    const line = lineOf(starts, start);
+    // A deletion at a paragraph boundary leaves `start` at the END of the
+    // prefix's line, which is not where the deleted text was: the gap now
+    // closes onto whatever follows, so report that line instead. With
+    // nothing but whitespace left after it (a deletion at the end of the
+    // note), keep the line the span itself sits on.
+    let at = start;
+    if (newSource[at] === '\n') {
+      while (at < newSource.length && /\s/.test(newSource[at])) at++;
+      if (at >= newSource.length) at = start;
+    }
+    const line = lineOf(starts, at);
     return { text: '', lines: [line, line] };
   }
   const leadingWs = raw.length - raw.trimStart().length;
@@ -431,6 +441,18 @@ export function triage(comments, oldSource, newSource, newRev) {
       const moved = repin(newSrc, newStarts, item, a, replacedBy, newRev, false);
       return { ...item, ...moved, rev: newRev };
     }
+    // A block/approx anchor is compared against text sliced from `oldSource`
+    // by line. When `item.rev` is not the revision right before this one, a
+    // previous triage failed and those lines no longer mean what the anchor
+    // says — comparing would judge the wrong paragraph. Hold the item where
+    // it is (clamped into the new note) until an anchor and a base line up.
+    if ((a.block || a.approx) && item.status === 'open' && item.rev !== newRev - 1) {
+      const [s, e] = clampLines(newStarts.length, a.lines);
+      const anchor = item.anchor.block
+        ? withBlockLines(item.anchor, s, e)
+        : { ...item.anchor, lines: [s, e] };
+      return { ...item, anchor, rev: newRev };
+    }
     const found = follow(oldSrc, newSrc, item, a, newStarts, strippedRef);
 
     if (found) {
@@ -456,6 +478,13 @@ export function triage(comments, oldSource, newSource, newRev) {
     if (item.tag === 'q') {
       return { ...item, anchor: linesBlock(newStarts.length, a.lines), rev: newRev };
     }
+    // Gone from the new source — but it has to have been THERE in the old one
+    // for this revision to be what removed it. An anchor that was already
+    // unlocatable before this save addressed nothing; leave it open (the
+    // export keeps flagging it as not found) instead of silently closing it.
+    // `keep` is exempt: its quote missing from the base is itself the
+    // violation.
+    if (item.tag !== 'keep' && !locate(oldSrc, a)) return { ...item, rev: newRev };
     const span = a.block || a.approx ? null : replacedSpan(newSrc, a, newStarts);
     const resolved = {
       ...item,
