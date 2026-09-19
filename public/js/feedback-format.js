@@ -8,6 +8,20 @@ const CONTEXT_CHARS = 16;
 
 const esc = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
 const flat = (s) => s.replace(/\s+/g, ' ');
+const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
+
+// CriticMarkup delimiters that user/derived text must never be allowed to
+// smuggle into a `{>>...<<}` comment — either escaping it early (a note
+// containing a literal "<<}") or corrupting a highlight span. Break each one
+// with an inserted space; never applied to markdown syntax outside comments.
+const CM_DELIMS = ['<<}', '{>>', '==}', '{=='];
+const hasCmDelimiter = (s) => CM_DELIMS.some((d) => s.includes(d));
+const neutralizeCm = (s) =>
+  s
+    .replace(/<<\}/g, '<< }')
+    .replace(/\{>>/g, '{ >>')
+    .replace(/==\}/g, '== }')
+    .replace(/\{==/g, '{ ==');
 
 function quoteText(quote) {
   const words = quote.trim().split(/\s+/);
@@ -106,37 +120,105 @@ export function formatFeedback(comments, source, meta, opts = {}) {
 /**
  * The full source with open comments embedded as CriticMarkup, for an agent
  * that has no copy of the document. Costs the whole document in tokens.
+ *
+ * CriticMarkup can't express crossing/nested spans, so overlapping quotes are
+ * resolved by acceptance order (first by source position, then longest):
+ * identical ranges share one highlight (one comment per item, in id order);
+ * anything that merely intersects an already-accepted range is degraded to a
+ * trailing note instead of its own `{==...==}`. A located quote that itself
+ * contains a CriticMarkup delimiter is degraded the same way, since the
+ * delimiter can't be neutralized without altering the document text.
  */
 export function formatCriticMarkup(comments, source) {
-  const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
   const open = comments.items.filter((i) => i.status === 'open');
-  const inserts = []; // { at, text }, applied from the end so offsets stay valid
+
+  const label = (item) =>
+    `${item.id} ${item.tag}${item.replace ? ` => "${esc(neutralizeCm(item.replace))}"` : ''}`;
+  const noteSuffix = (item) => (item.note ? `: ${oneLine(neutralizeCm(item.note))}` : '');
+  const comment = (item) => `{>>${label(item)}${noteSuffix(item)}<<}`;
+  const noteOnly = (item, what) => `{>>${label(item)}${what}${noteSuffix(item)}<<}`;
+  const quoted = (text) => ` ~"${oneLine(neutralizeCm(text))}"`;
+
   const lineStart = (line) => {
     let at = 0;
     for (let n = 1; n < line; n++) at = source.indexOf('\n', at) + 1;
     return at;
   };
+
+  // Events are applied in a single left-to-right pass over `source` (sorted,
+  // then walked once), so inserting at one offset never shifts another.
+  const events = []; // { at, order, id, text }
+  const pushEvent = (at, order, item, text) => events.push({ at, order, id: item.id, text });
+
+  const exact = []; // candidate highlight spans: { item, start, end }
   for (const item of open) {
     if (!item.anchor) continue;
     const hit = locate(source, item.anchor);
     if (!hit) continue;
-    const label = `${item.id} ${item.tag}${item.replace ? ` => "${esc(item.replace)}"` : ''}`;
-    const note = item.note ? `: ${oneLine(item.note)}` : '';
     if (hit.start == null) {
       const what = item.anchor.block
-        ? ` [${item.anchor.block.label}]`
-        : ` ~"${oneLine(item.anchor.quote)}"`;
-      inserts.push({ at: lineStart(hit.lines[0]), text: `{>>${label}${what}${note}<<}` });
-    } else {
-      inserts.push({ at: hit.end, text: `==}{>>${label}${note}<<}` });
-      inserts.push({ at: hit.start, text: '{==' });
+        ? ` [${neutralizeCm(item.anchor.block.label)}]`
+        : quoted(item.anchor.quote);
+      pushEvent(lineStart(hit.lines[0]), 1, item, noteOnly(item, what));
+      continue;
     }
+    const quote = source.slice(hit.start, hit.end);
+    if (hasCmDelimiter(quote)) {
+      pushEvent(hit.start, 1, item, noteOnly(item, quoted(quote)));
+      continue;
+    }
+    exact.push({ item, start: hit.start, end: hit.end });
   }
-  let out = source;
-  for (const ins of inserts.sort((a, b) => b.at - a.at)) {
-    out = out.slice(0, ins.at) + ins.text + out.slice(ins.at);
+
+  // Longest-first within a start so a containing span is accepted before the
+  // quotes nested inside it are considered.
+  exact.sort((a, b) => a.start - b.start || b.end - a.end || a.item.id.localeCompare(b.item.id));
+  const groups = []; // accepted, mutually non-overlapping spans
+  for (const cand of exact) {
+    const identical = groups.find((g) => g.start === cand.start && g.end === cand.end);
+    if (identical) {
+      identical.comments.push(cand.item);
+      continue;
+    }
+    const overlapping = groups.find((g) => cand.start < g.end && g.start < cand.end);
+    if (overlapping) {
+      overlapping.degraded.push(cand);
+      continue;
+    }
+    groups.push({ start: cand.start, end: cand.end, comments: [cand.item], degraded: [] });
   }
+  for (const g of groups) {
+    pushEvent(g.start, 0, g.comments[0], '{==');
+    const trailing = g.degraded
+      .map((d) => noteOnly(d.item, quoted(source.slice(d.start, d.end))))
+      .join('');
+    pushEvent(g.end, 2, g.comments[0], `==}${g.comments.map(comment).join('')}${trailing}`);
+  }
+
+  events.sort((a, b) => a.at - b.at || a.order - b.order || a.id.localeCompare(b.id));
+  const parts = [];
+  let cursor = 0;
+  for (const e of events) {
+    parts.push(source.slice(cursor, e.at), e.text);
+    cursor = e.at;
+  }
+  parts.push(source.slice(cursor));
+  const out = parts.join('');
+
   const general = open.filter((i) => i.tag === 'general' && i.note);
-  const head = general.map((g) => `{>>general: ${oneLine(g.note)}<<}\n`).join('');
-  return head + out;
+  const generalHead = general
+    .map((g) => `{>>general: ${oneLine(neutralizeCm(g.note))}<<}\n`)
+    .join('');
+
+  // Their original anchor is gone by definition, so print the recorded quote
+  // (not a resolved location) as an instruction to restore it.
+  const violated = comments.items.filter((i) => i.status === 'violated');
+  const violatedHead = violated
+    .map((v) => {
+      const ln = (v.resolvedLines || v.anchor.lines)[0];
+      return `{>>${v.id} ${v.tag} VIOLATED — restore exactly: "${oneLine(neutralizeCm(v.anchor.quote))}" (near L${ln})<<}\n`;
+    })
+    .join('');
+
+  return generalHead + violatedHead + out;
 }

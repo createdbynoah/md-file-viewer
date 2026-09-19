@@ -217,4 +217,203 @@ describe('formatCriticMarkup', () => {
     );
     expect(out).toContain('{==soon==}{>>c1 fix => "on 1 March": a b<<}');
   });
+
+  // Helper for the overlap tests below: every {== and ==} in the output must
+  // pair up and alternate strictly — CriticMarkup can't express crossing or
+  // nested spans, so the formatter must never emit one.
+  const assertBalanced = (out) => {
+    const tokens = [...out.matchAll(/\{==|==\}/g)].map((m) => m[0]);
+    expect(tokens.length % 2).toBe(0);
+    for (let i = 0; i < tokens.length; i += 2) {
+      expect(tokens[i]).toBe('{==');
+      expect(tokens[i + 1]).toBe('==}');
+    }
+    return tokens;
+  };
+
+  it('keeps two comments on the same quote in one highlight, in id order', () => {
+    const out = formatCriticMarkup(
+      {
+        round: 1,
+        items: [item({ id: 'c1', tag: 'fix', note: 'A' }), item({ id: 'c2', tag: 'q', note: 'B' })],
+      },
+      SRC
+    );
+    expect(out).toBe(
+      'Tail latency matters.\nMedian latency does not.\nShip {==soon==}{>>c1 fix: A<<}{>>c2 q: B<<}.'
+    );
+    assertBalanced(out);
+  });
+
+  it('degrades a nested quote to a trailing note, leaving exactly one open/close pair', () => {
+    const outer = item({
+      id: 'c1',
+      tag: 'fix',
+      note: 'Fix this',
+      anchor: {
+        quote: 'latency matters',
+        approx: false,
+        prefix: 'Tail ',
+        suffix: '.',
+        lines: [1, 1],
+      },
+    });
+    const inner = item({
+      id: 'c2',
+      tag: 'q',
+      note: 'Which?',
+      anchor: {
+        quote: 'matters',
+        approx: false,
+        prefix: 'Tail latency ',
+        suffix: '.',
+        lines: [1, 1],
+      },
+    });
+    const out = formatCriticMarkup({ round: 1, items: [outer, inner] }, SRC);
+    const tokens = assertBalanced(out);
+    expect(tokens.length).toBe(2);
+    expect(out).toContain(
+      '{==latency matters==}{>>c1 fix: Fix this<<}{>>c2 q ~"matters": Which?<<}'
+    );
+  });
+
+  it('degrades a partially overlapping quote the same way', () => {
+    const first = item({
+      id: 'c1',
+      tag: 'fix',
+      note: 'A',
+      anchor: {
+        quote: 'Tail latency',
+        approx: false,
+        prefix: '',
+        suffix: ' matters.',
+        lines: [1, 1],
+      },
+    });
+    const second = item({
+      id: 'c2',
+      tag: 'q',
+      note: 'B',
+      anchor: {
+        quote: 'latency matters',
+        approx: false,
+        prefix: 'Tail ',
+        suffix: '.',
+        lines: [1, 1],
+      },
+    });
+    const out = formatCriticMarkup({ round: 1, items: [first, second] }, SRC);
+    const tokens = assertBalanced(out);
+    expect(tokens.length).toBe(2);
+    expect(out).toContain('{==Tail latency==}{>>c1 fix: A<<}{>>c2 q ~"latency matters": B<<}');
+  });
+
+  it('keeps {== and ==} balanced and alternating for a handful of overlapping/nested ranges', () => {
+    const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet'.split(' ');
+    const src = words.join(' ');
+    const span = (from, to) => words.slice(from, to).join(' ');
+    const mk = (id, quote) =>
+      item({
+        id,
+        tag: 'fix',
+        note: 'n',
+        anchor: { quote, approx: false, prefix: '', suffix: '', lines: [1, 1] },
+      });
+    const items = [
+      mk('c1', span(0, 3)), // alpha bravo charlie
+      mk('c2', span(1, 4)), // bravo charlie delta      — overlaps c1
+      mk('c3', span(2, 3)), // charlie                  — nested in c1
+      mk('c4', span(3, 5)), // delta echo               — disjoint from c1
+      mk('c5', span(6, 10)), // golf hotel india juliet — disjoint from all above
+      mk('c6', span(7, 9)), // hotel india              — nested in c5
+    ];
+    const out = formatCriticMarkup({ round: 1, items }, src);
+    const tokens = assertBalanced(out);
+    expect(tokens.length).toBeGreaterThan(0);
+  });
+
+  it('neutralizes a `<<}` inside a note so it cannot close the comment early', () => {
+    const out = formatCriticMarkup(
+      { round: 1, items: [item({ id: 'c1', note: 'close early <<} then more' })] },
+      SRC
+    );
+    expect((out.match(/<<\}/g) || []).length).toBe(1);
+    expect(out).toContain('{>>c1 fix: close early << } then more<<}');
+  });
+
+  it('degrades a quote that itself contains a delimiter instead of highlighting it', () => {
+    const localSrc = 'Before ==} after.';
+    const out = formatCriticMarkup(
+      {
+        round: 1,
+        items: [
+          item({
+            id: 'c1',
+            note: 'weird',
+            anchor: {
+              quote: '==}',
+              approx: false,
+              prefix: 'Before ',
+              suffix: ' after.',
+              lines: [1, 1],
+            },
+          }),
+        ],
+      },
+      localSrc
+    );
+    expect(out).not.toContain('{==');
+    expect(out).toBe('Before {>>c1 fix ~"== }": weird<<}==} after.');
+  });
+
+  it('lists violated keep items after general notes and before the document', () => {
+    const out = formatCriticMarkup(
+      {
+        round: 1,
+        items: [
+          { id: 'g1', tag: 'general', note: 'Too salesy', status: 'open' },
+          item({
+            id: 'k2',
+            tag: 'keep',
+            status: 'violated',
+            anchor: {
+              quote: 'gone text',
+              approx: false,
+              prefix: '',
+              suffix: '',
+              lines: [1, 1],
+            },
+            resolvedLines: [2, 2],
+          }),
+          item({ id: 'c9', status: 'addressed' }),
+        ],
+      },
+      SRC
+    );
+    expect(out).toBe(
+      '{>>general: Too salesy<<}\n' +
+        '{>>k2 keep VIOLATED — restore exactly: "gone text" (near L2)<<}\n' +
+        SRC
+    );
+    expect(out).not.toContain('c9');
+  });
+
+  it('falls back to the anchor line when a violated item has no resolvedLines', () => {
+    const out = formatCriticMarkup(
+      {
+        round: 1,
+        items: [
+          item({
+            id: 'k2',
+            tag: 'keep',
+            status: 'violated',
+            anchor: { quote: 'gone text', approx: false, prefix: '', suffix: '', lines: [5, 5] },
+          }),
+        ],
+      },
+      SRC
+    );
+    expect(out).toContain('(near L5)<<}');
+  });
 });
