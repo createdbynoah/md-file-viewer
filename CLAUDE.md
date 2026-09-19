@@ -33,6 +33,7 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 - `public/js/scroll-memory.js` — pure per-note scroll-position helpers (unit-tested)
 - `public/js/header-autohide.js` — pure show/hide decision for the sticky note toolbar (unit-tested)
 - `public/js/anchor.js` — pure source-quote anchoring (capture/locate); also imported by the worker (unit-tested)
+- `public/js/triage.js` — pure re-anchoring of review comments against a new revision; imported by the worker (`PUT /api/files/:id`) and by the UAT seed (unit-tested)
 - `public/js/feedback-format.js` — pure agent-feedback text generator (unit-tested)
 - `public/js/source-lines.js` — markdown-it plugin stamping `data-line` on blocks (unit-tested)
 - `public/js/review-layout.js` — pure layout/keyboard-inset/summary helpers for review mode (unit-tested)
@@ -45,7 +46,7 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 **Storage bindings** (configured in `wrangler.jsonc`):
 
 - `MD_FILES` — R2 bucket, stores raw markdown as `{uuid}.md` (current) plus `{uuid}/r/{n}.md` revision snapshots
-- `HISTORY` — KV namespace: `meta:{uuid}` (per-file metadata incl. `ownerId`, `visibility: 'private'|'link'`, `editors`, `currentRev`), `rev:{uuid}` (revision log, newest first, cap 100), `user:{sub}` (account), `user:{sub}:notes` (owner's note ids, newest first), `history:{sub}` (view history, max 100), `folders:{sub}`, `comments:{uuid}` (owner's review comments `{ nextId, round, items }`, cap 500)
+- `HISTORY` — KV namespace: `meta:{uuid}` (per-file metadata incl. `ownerId`, `visibility: 'private'|'link'`, `editors`, `currentRev`), `rev:{uuid}` (revision log, newest first, cap 100), `user:{sub}` (account), `user:{sub}:notes` (owner's note ids, newest first), `history:{sub}` (view history, max 100), `folders:{sub}`, `comments:{uuid}` (owner's review comments `{ nextId, round, items, lastTriage }`, cap 500)
 
 **Auth:** Cloudflare Access (Zero Trust) gates only `/api/auth/login`. Every `/api/*` request runs `resolveUser()` which verifies the `CF_Authorization` cookie (or `Cf-Access-Jwt-Assertion` header) via `src/auth.js` against `ACCESS_AUD` / `ACCESS_TEAM_DOMAIN` (wrangler vars, not secrets) and sets `c.get('user')` to `{ id, email }` or `null`. Routes outside `/api/auth/*` 401 without a user. Design: `docs/plans/2026-09-04-auth-design.md`.
 
@@ -55,30 +56,30 @@ Pre-commit hook (husky + lint-staged) runs eslint --fix + prettier on staged fil
 
 All routes are prefixed with `/api/`. Auth-protected unless noted:
 
-| Method | Path                           | Purpose                                                       |
-| ------ | ------------------------------ | ------------------------------------------------------------- |
-| GET    | `/api/auth/login`              | Access-gated; upserts user, redirects (unprotected)           |
-| GET    | `/api/auth/check`              | `{ authenticated, user }` (unprotected)                       |
-| POST   | `/api/auth/logout`             | Clears cookie, returns Access logout URL (unprotected)        |
-| POST   | `/api/upload`                  | Upload `.md` file (multipart form)                            |
-| POST   | `/api/paste`                   | Save pasted markdown (JSON body)                              |
-| GET    | `/api/files`                   | List all files                                                |
-| GET    | `/api/files/:id`               | Get file content; anonymous OK for 'link' notes (unprotected) |
-| PATCH  | `/api/files/:id`               | Rename file                                                   |
-| PATCH  | `/api/files/:id/visibility`    | Set 'private' or 'link' (owner only)                          |
-| DELETE | `/api/files/:id`               | Delete file                                                   |
-| PUT    | `/api/files/:id`               | Edit content; creates a revision (owner only)                 |
-| GET    | `/api/files/:id/revisions`     | Revision log, newest first (same read rules; unprotected)     |
-| GET    | `/api/files/:id/revisions/:n`  | Raw markdown snapshot (same read rules; unprotected)          |
-| GET    | `/api/history`                 | Get view history                                              |
-| DELETE | `/api/history`                 | Clear all history                                             |
-| DELETE | `/api/history/:id`             | Remove single history entry                                   |
-| GET    | `/api/files/:id/comments`      | List review comments (owner only)                             |
-| POST   | `/api/files/:id/comments`      | Add comment; 409 if anchor not in current source              |
-| PATCH  | `/api/files/:id/comments/:cid` | Edit note/tag/status                                          |
-| DELETE | `/api/files/:id/comments/:cid` | Delete comment                                                |
-| POST   | `/api/dev/seed`                | UAT only: reset + seed scenarios                              |
-| POST   | `/api/dev/retention`           | UAT only: run retention cron now                              |
+| Method | Path                           | Purpose                                                                                            |
+| ------ | ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| GET    | `/api/auth/login`              | Access-gated; upserts user, redirects (unprotected)                                                |
+| GET    | `/api/auth/check`              | `{ authenticated, user }` (unprotected)                                                            |
+| POST   | `/api/auth/logout`             | Clears cookie, returns Access logout URL (unprotected)                                             |
+| POST   | `/api/upload`                  | Upload `.md` file (multipart form)                                                                 |
+| POST   | `/api/paste`                   | Save pasted markdown (JSON body)                                                                   |
+| GET    | `/api/files`                   | List all files                                                                                     |
+| GET    | `/api/files/:id`               | Get file content; anonymous OK for 'link' notes (unprotected)                                      |
+| PATCH  | `/api/files/:id`               | Rename file                                                                                        |
+| PATCH  | `/api/files/:id/visibility`    | Set 'private' or 'link' (owner only)                                                               |
+| DELETE | `/api/files/:id`               | Delete file                                                                                        |
+| PUT    | `/api/files/:id`               | Edit content; creates a revision and re-triages review comments (owner only)                       |
+| GET    | `/api/files/:id/revisions`     | Revision log, newest first (same read rules; unprotected)                                          |
+| GET    | `/api/files/:id/revisions/:n`  | Raw markdown snapshot (same read rules; unprotected)                                               |
+| GET    | `/api/history`                 | Get view history                                                                                   |
+| DELETE | `/api/history`                 | Clear all history                                                                                  |
+| DELETE | `/api/history/:id`             | Remove single history entry                                                                        |
+| GET    | `/api/files/:id/comments`      | List review comments (owner only); includes `lastTriage`, the summary of the most recent re-triage |
+| POST   | `/api/files/:id/comments`      | Add comment; 409 if anchor not in current source                                                   |
+| PATCH  | `/api/files/:id/comments/:cid` | Edit note/tag/status; reopening an addressed item re-anchors it                                    |
+| DELETE | `/api/files/:id/comments/:cid` | Delete comment                                                                                     |
+| POST   | `/api/dev/seed`                | UAT only: reset + seed scenarios                                                                   |
+| POST   | `/api/dev/retention`           | UAT only: run retention cron now                                                                   |
 
 ## CI/CD
 
@@ -118,4 +119,5 @@ Agent-driven UAT: `pnpm uat` → `.claude/skills/verifier-web/SKILL.md`.
 - Listing a user's notes reads `user:{sub}:notes` then `getMetaMany`; never a `meta:` prefix scan (eventually consistent). Only the retention cron scans.
 - Revisions: `PUT` snapshots rev 0 lazily on first edit; cap 100 with oldest snapshot deleted; `deleteNoteObjects()` is the only way a note's objects are removed. Diffs are client-side (`jsdiff` CDN). Note size cap 2 MB.
 - Review chrome (the comment pill, review bar and bottom sheets) is appended to `document.body`, not the note, so every path that leaves the note or the app — including `showLogin()` — must call `comments.clear()` or it floats over the next screen.
+- Triage (`public/js/triage.js`) runs inside `PUT /api/files/:id` with old and new source in hand, wrapped in try/catch — a triage failure must never fail a save. No fuzzy matching: `fix`/`cut` found (whitespace/typographer-tolerant) → carried, gone → `addressed` with `replacedBy` captured between the surviving 32-char context (a `keep`'s own context can be edited too, e.g. by a neighboring edit — when the surrounding 32 chars no longer match, `replacedBy` is simply omitted rather than guessed); `keep` must be byte-identical or it becomes `violated` (restored automatically if the text comes back — with duplicate kept text, a keep counts as found only if some exact hit still has matching prefix/suffix context, or the stored context is empty, in which case the nearest hit by line wins); `q`/`general` are manual. The client only renders the result: `repaint()` draws the banner before the rail so the rail can measure against the banner's final height, and the banner is dismissed per `localStorage` key `triageSeen:{id}:{rev}` (capped at 50 entries). After a save, `app.js` calls `comments.load()` before `exitEditMode()`, and `refresh()` no-ops while a load is in flight, so there is no "anchor not found" flash. The ▾ copy-options menu closes other toolbar menus and closes on Escape; the CriticMarkup export lists violated keeps at the top (`{>>k2 keep VIOLATED — restore exactly: "…" (near L4)<<}`), merges identical highlight ranges, degrades overlapping ones to a trailing `~"quote"` note, and neutralizes CriticMarkup delimiters in user text; an addressed item's exported line ends with `(addressed in rev N)`.
 - Review comments anchor to the raw markdown (exact quote + 32-char context + 1-based line range), never to the DOM; `data-line` on rendered blocks maps selections back to source — on an indented code block it lands on the `<pre>`, not the fenced `<code>`, and a list's range may include its trailing blank line. Matching is whitespace-tolerant and treats each typographic character `markdown-it`'s `typographer` produces (`’ “ ” – — …`) as equal to its ASCII source form (`' " -- --- ...`) in both directions — equivalence, not fuzziness: an edit inside the quote still means the anchor is gone. A selection with no single covering block (paragraph into the next heading) is searched across the top-level blocks it touches, so only a quote `locate()` cannot find is labelled "anchor not found". Exported `L` numbers are always re-resolved against the current source. Highlights use the CSS Custom Highlight API so the rendered DOM is never mutated. The tag-picker shortcut is **Option/Alt+1–4** (matched on `e.code`, not the digit itself) so bare digit keys still type into the note. Review mode presents per layout (`review-layout.js`): margin rail ≥1024, a list drawer inside the sticky header at 768–1023, and below 768 a bottom review bar + bottom sheets. Input mode follows the pointer, not the width: `(pointer: coarse)` or the sheet layout shows a floating Comment pill on `selectionchange` (anchor captured then; `pointerdown` is prevented so the tap keeps the selection) — fine pointers keep the mouseup popover. Fixed review chrome paints its background via `::before` (iOS 26 rule) and the sheet rides above the keyboard with `--kb-inset` from `visualViewport`. Review mode is unavailable (button hidden, and on the ••• menu Copy feedback is absent too) while an old revision snapshot is shown. Design: `docs/plans/2026-09-18-markup-comments-design.md`.
