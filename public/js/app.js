@@ -97,6 +97,9 @@ const editorCancelBtn = document.getElementById('editor-cancel-btn');
 const editorSaveBtn = document.getElementById('editor-save-btn');
 const reviewBtn = document.getElementById('review-btn');
 const copyFeedbackBtn = document.getElementById('copy-feedback-btn');
+const copyFeedbackMenuBtn = document.getElementById('copy-feedback-menu-btn');
+const copyFeedbackMenu = document.getElementById('copy-feedback-menu');
+const reviewBanner = document.getElementById('review-banner');
 const commentsRail = document.getElementById('comments-rail');
 const commentsListBtn = document.getElementById('comments-list-btn');
 const commentsDrawer = document.getElementById('comments-drawer');
@@ -359,6 +362,10 @@ const comments = initComments({
   listBtn: commentsListBtn,
   reviewBtn,
   copyBtn: copyFeedbackBtn,
+  banner: reviewBanner,
+  copyMenuBtn: copyFeedbackMenuBtn,
+  copyMenu: copyFeedbackMenu,
+  diffWords: (a, b) => window.Diff.diffWords(a, b),
   api,
   getNote: () => currentNote,
   getSource: () => currentRawMarkdown,
@@ -1198,6 +1205,8 @@ async function saveEdit() {
     snapshotCache.clear();
     closeRevisions();
     exitEditMode();
+    // The save re-triaged the review comments server-side; fetch the result.
+    comments.load();
     syncSidebar('file-edit');
   } catch (e) {
     // api() already redirected on 401; anything else is a network failure.
@@ -1458,6 +1467,7 @@ function headerLocked() {
     !revisionsDrawer.hidden ||
     !moreMenu.hidden ||
     !folderDropdown.hidden ||
+    !copyFeedbackMenu.hidden ||
     viewerHeader.querySelector(':focus-visible') !== null
   );
 }

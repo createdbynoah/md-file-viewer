@@ -230,6 +230,19 @@
                   <button id="copy-feedback-btn" class="text-btn" data-secondary hidden>
                     Copy feedback
                   </button>
+                  <span class="copy-feedback-more">
+                    <button
+                      id="copy-feedback-menu-btn"
+                      class="text-btn"
+                      aria-label="More copy options"
+                      aria-haspopup="menu"
+                      aria-expanded="false"
+                      hidden
+                    >
+                      ▾
+                    </button>
+                    <div id="copy-feedback-menu" class="folder-dropdown" role="menu" hidden></div>
+                  </span>
                   <button id="edit-btn" class="text-btn" hidden>Edit</button>
                   <button id="history-btn" class="text-btn" data-secondary hidden>History</button>
                   <button id="visibility-btn" class="text-btn" hidden></button>
@@ -296,6 +309,7 @@
                   <button id="editor-save-btn" class="primary-btn">Save</button>
                 </div>
               </div>
+              <div id="review-banner" class="review-banner" role="status" hidden></div>
               <article id="rendered-output" class="markdown-body"></article>
               <aside
                 id="comments-rail"

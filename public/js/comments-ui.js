@@ -3,11 +3,11 @@
 // highlights via the CSS Custom Highlight API, a margin rail of cards, and
 // "Copy feedback". All anchoring maths lives in anchor.js; this file is DOM glue.
 import { captureAnchor, blockAnchor, locate, nthInLines, wsRegex } from './anchor.js';
-import { formatFeedback } from './feedback-format.js';
+import { formatFeedback, formatCriticMarkup } from './feedback-format.js';
 import { el } from './el.js';
 import { buildCard, buildGeneralCard } from './comments-cards.js';
 import { buildComposer } from './comments-composer.js';
-import { layoutFor, keyboardInset, summarize, summaryLabel } from './review-layout.js';
+import { layoutFor, keyboardInset, summarize, summaryLabel, triageLabel } from './review-layout.js';
 
 const HIGHLIGHT_FOR = {
   fix: 'review-fix',
@@ -177,10 +177,23 @@ function outermostBlock(root, target) {
 }
 
 export function initComments(deps) {
-  const { root, scroller, rail, drawer, listBtn, reviewBtn, copyBtn, api } = deps;
+  const {
+    root,
+    scroller,
+    rail,
+    drawer,
+    listBtn,
+    reviewBtn,
+    copyBtn,
+    banner,
+    copyMenuBtn,
+    copyMenu,
+    api,
+  } = deps;
   const drawerList = drawer.querySelector('.comments-list');
   const coarse = window.matchMedia('(pointer: coarse)');
   let data = { round: 1, items: [] };
+  let addressedOpen = false;
   let reviewing = false;
   let activeId = null;
   let popover = null; // composer or item view, rail/drawer layouts
@@ -279,7 +292,34 @@ export function initComments(deps) {
       onToggle: () =>
         patch(item.id, { status: item.status === 'open' ? 'addressed' : 'open' }).catch(() => {}),
       onDelete: () => remove(item.id),
+      diffWords: deps.diffWords,
+      onAccept: () => remove(item.id),
     });
+  }
+
+  /** Violated keeps first, then live items by position; addressed go to the disclosure. */
+  function partition() {
+    const anchored = data.items.filter((i) => i.anchor);
+    return {
+      violated: anchored.filter((i) => i.status === 'violated'),
+      live: anchored.filter((i) => i.status === 'open'),
+      addressed: anchored.filter((i) => i.status === 'addressed'),
+    };
+  }
+
+  function addressedDisclosure(addressed) {
+    const details = el('details', { className: 'comments-addressed', open: addressedOpen }, [
+      el('summary', { textContent: `${addressed.length} addressed` }),
+      ...addressed.map((item) => cardFor(item, false, false)),
+    ]);
+    details.addEventListener('toggle', () => {
+      // Creating it with `open` set fires a toggle too; only a real change may
+      // re-render, or the rebuild below would loop.
+      if (details.open === addressedOpen) return;
+      addressedOpen = details.open;
+      if (layout() === 'rail') renderList(); // re-measure: the rail's height is explicit
+    });
+    return details;
   }
 
   function targetTop(item) {
@@ -291,30 +331,58 @@ export function initComments(deps) {
   }
 
   function renderRail() {
+    const { violated, live, addressed } = partition();
     const general = data.items.find((i) => i.tag === 'general');
     const generalCard = buildGeneralCard(general, () => openComposer({ general }));
     rail.append(generalCard);
-    const placed = data.items
-      .filter((i) => i.anchor)
-      .map((item) => ({ item, top: targetTop(item), orphaned: !targets.has(item.id) }))
-      .sort((a, b) => (a.top ?? Infinity) - (b.top ?? Infinity));
     let floor = generalCard.offsetTop + generalCard.offsetHeight + CARD_GAP;
-    for (const { item, top, orphaned } of placed) {
-      const card = cardFor(item, orphaned);
+    const place = (card, top) => {
       rail.append(card);
       const y = Math.max(top ?? floor, floor);
       card.style.top = `${y}px`;
       floor = y + card.offsetHeight + CARD_GAP;
+    };
+    // Violated keeps are pinned under the general note, not at their (gone) anchor.
+    for (const item of violated) place(cardFor(item, false), null);
+    const placed = live
+      .map((item) => ({ item, top: targetTop(item), orphaned: !targets.has(item.id) }))
+      .sort((a, b) => (a.top ?? Infinity) - (b.top ?? Infinity));
+    for (const { item, top, orphaned } of placed) place(cardFor(item, orphaned), top);
+    if (addressed.length) {
+      const details = addressedDisclosure(addressed);
+      details.style.position = 'absolute';
+      details.style.left = '0';
+      details.style.right = '0';
+      details.style.top = `${floor}px`;
+      rail.append(details);
+      floor += details.offsetHeight + CARD_GAP;
     }
     rail.style.height = `${floor}px`;
   }
 
   function renderFlatList(host) {
+    const { violated, live, addressed } = partition();
     const general = data.items.find((i) => i.tag === 'general');
     host.append(buildGeneralCard(general, () => openComposer({ general })));
+    for (const item of violated) host.append(cardFor(item, false));
     const line = (item) => targets.get(item.id)?.lines[0] ?? Infinity;
-    const anchored = data.items.filter((i) => i.anchor).sort((a, b) => line(a) - line(b));
-    for (const item of anchored) host.append(cardFor(item, !targets.has(item.id)));
+    for (const item of [...live].sort((a, b) => line(a) - line(b))) {
+      host.append(cardFor(item, !targets.has(item.id)));
+    }
+    if (addressed.length) host.append(addressedDisclosure(addressed));
+    if (host === sheetBody) {
+      const more = (label, fn) => {
+        const b = el('button', { type: 'button', className: 'text-btn', textContent: label });
+        b.addEventListener('click', () => fn(b));
+        return b;
+      };
+      host.append(
+        el('div', { className: 'review-sheet-copy' }, [
+          more('Copy incl. addressed', (b) => copyFeedback(b, 'addressed')),
+          more('Copy inline (CriticMarkup)', (b) => copyFeedback(b, 'critic')),
+        ])
+      );
+    }
   }
 
   function renderList() {
@@ -368,6 +436,46 @@ export function initComments(deps) {
     if (show) barSummary.textContent = summaryLabel(summarize(data.items));
   }
 
+  function renderBanner() {
+    const current = note();
+    const t = data.lastTriage;
+    const seenKey = current && t ? `triageSeen:${current.id}:${t.rev}` : null;
+    let seen = false;
+    try {
+      seen = Boolean(seenKey && localStorage.getItem(seenKey));
+    } catch {}
+    const unverified = Boolean(
+      current && data.items.some((i) => i.anchor && (i.rev ?? 0) < (current.currentRev || 0))
+    );
+    const showRound = Boolean(t && current && t.rev === current.currentRev && !seen);
+    banner.replaceChildren();
+    banner.hidden = !(active() && (showRound || unverified));
+    if (banner.hidden) return;
+    banner.classList.toggle('has-violations', Boolean(showRound && t.violated));
+    banner.append(
+      el('span', {
+        className: 'review-banner-text',
+        textContent: showRound
+          ? triageLabel(t)
+          : 'Comments were not re-checked against this revision; positions may be stale.',
+      })
+    );
+    if (showRound) {
+      const dismiss = el('button', {
+        type: 'button',
+        className: 'text-btn',
+        textContent: 'Dismiss',
+      });
+      dismiss.addEventListener('click', () => {
+        try {
+          localStorage.setItem(seenKey, '1');
+        } catch {}
+        renderBanner();
+      });
+      banner.append(dismiss);
+    }
+  }
+
   function repaint() {
     // An item view shows a snapshot of one comment; anything that repaints may
     // have changed it. The composer holds unsaved input, so it is left alone.
@@ -376,7 +484,9 @@ export function initComments(deps) {
     paintHighlights();
     renderList();
     renderBar();
+    renderBanner();
     copyBtn.hidden = !(note() && note().owned && data.items.length);
+    copyMenuBtn.hidden = copyBtn.hidden;
   }
 
   function activate(id, { scroll = false } = {}) {
@@ -430,6 +540,7 @@ export function initComments(deps) {
   async function load() {
     data = { round: 1, items: [] };
     activeId = null;
+    addressedOpen = false;
     copyBtn.hidden = true;
     const current = note();
     if (current && current.owned) {
@@ -441,13 +552,20 @@ export function initComments(deps) {
     repaint();
   }
 
-  function copyFeedback(flashOn) {
+  /** mode: undefined (open only) | 'addressed' | 'critic' */
+  function copyFeedback(flashOn, mode) {
     const current = note();
     if (!current) return;
-    const text = formatFeedback(data, deps.getSource(), {
-      title: deps.getTitle(),
-      rev: current.currentRev,
-    });
+    const source = deps.getSource();
+    const text =
+      mode === 'critic'
+        ? formatCriticMarkup(data, source)
+        : formatFeedback(
+            data,
+            source,
+            { title: deps.getTitle(), rev: current.currentRev },
+            { includeAddressed: mode === 'addressed' }
+          );
     navigator.clipboard
       .writeText(text)
       .then(() => deps.flashCopied(flashOn))
@@ -628,9 +746,19 @@ export function initComments(deps) {
   }
 
   function isChrome(target) {
-    return [rail, drawer, listBtn, gutterBtn, popover, sheet, bar, pill].some(
-      (node) => node && node.contains(target)
-    );
+    return [
+      rail,
+      drawer,
+      listBtn,
+      gutterBtn,
+      popover,
+      sheet,
+      bar,
+      pill,
+      copyMenuBtn,
+      copyMenu,
+      banner,
+    ].some((node) => node && node.contains(target));
   }
 
   /**
@@ -733,6 +861,7 @@ export function initComments(deps) {
       closeFloating();
       hidePill();
       setDrawer(false);
+      closeCopyMenu();
       if (gutterBtn) gutterBtn.hidden = true;
       activeId = null;
     }
@@ -774,8 +903,40 @@ export function initComments(deps) {
   });
   document.body.append(pill);
 
+  function closeCopyMenu() {
+    copyMenu.hidden = true;
+    copyMenuBtn.setAttribute('aria-expanded', 'false');
+  }
+
   reviewBtn.addEventListener('click', () => setReviewMode(!reviewing));
   copyBtn.addEventListener('click', () => copyFeedback(copyBtn));
+  copyMenuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!copyMenu.hidden) return closeCopyMenu();
+    copyMenu.replaceChildren(
+      ...[
+        ['Open only', undefined],
+        ['Include addressed', 'addressed'],
+        ['Inline (CriticMarkup)', 'critic'],
+      ].map(([label, mode]) => {
+        const b = el('button', {
+          type: 'button',
+          className: 'folder-dropdown-item',
+          textContent: label,
+        });
+        b.setAttribute('role', 'menuitem');
+        b.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          closeCopyMenu();
+          copyFeedback(copyBtn, mode);
+        });
+        return b;
+      })
+    );
+    copyMenu.hidden = false;
+    copyMenuBtn.setAttribute('aria-expanded', 'true');
+  });
+  document.addEventListener('click', closeCopyMenu);
   listBtn.addEventListener('click', () => {
     setDrawer(drawer.hidden);
     renderList();
@@ -805,6 +966,7 @@ export function initComments(deps) {
       closeFloating();
       hidePill();
       setDrawer(false);
+      closeCopyMenu();
       if (gutterBtn) gutterBtn.hidden = true;
       activeId = null;
       repaint();

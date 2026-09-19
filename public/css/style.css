@@ -1738,3 +1738,79 @@ body.read-only #back-btn {
     white-space: nowrap;
   }
 }
+
+/* ── Review comments: triage (phase A3) ──────────────────────────────────── */
+
+.review-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px max(24px, calc((100% - 860px) / 2)) 0;
+  padding: 8px 12px;
+  font-size: 0.8125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+.review-banner[hidden] {
+  display: none;
+}
+.review-banner.has-violations {
+  border-color: var(--danger);
+}
+.review-banner-text {
+  margin-right: auto;
+}
+
+.comment-card.is-violated {
+  border-color: var(--danger);
+  border-left: 3px solid var(--danger);
+}
+.comment-card.is-violated .comment-card-actions {
+  display: flex;
+}
+.comment-diff {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.comment-diff del {
+  background: var(--review-cut);
+}
+.comment-diff ins {
+  background: var(--review-keep);
+  text-decoration: none;
+}
+
+.comments-addressed {
+  margin-top: 8px;
+  font-size: 0.8125rem;
+}
+.comments-addressed > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+.comments-addressed .comment-card {
+  position: static;
+  margin-top: 8px;
+}
+.comments-addressed .comment-card-actions {
+  display: flex;
+}
+
+.copy-feedback-more {
+  position: relative;
+}
+@media (max-width: 767px) {
+  .copy-feedback-more {
+    display: none;
+  }
+}
+.review-sheet-copy {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+}
