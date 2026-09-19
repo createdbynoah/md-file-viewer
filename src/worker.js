@@ -3,7 +3,8 @@ import { getCookie, deleteCookie } from 'hono/cookie';
 import { createLogger } from './logger.js';
 import { seedScenarios } from './seed.js';
 import { verifyAccessJwt } from './auth.js';
-import { locate } from '../public/js/anchor.js';
+import { locate, anchorAt } from '../public/js/anchor.js';
+import { triage, reopenAnchor } from '../public/js/triage.js';
 
 /**
  * @typedef {object} Env
@@ -96,6 +97,27 @@ const commentsKey = (id) => `comments:${id}`;
 
 async function readRevisions(kv, id) {
   return readJsonArray(kv, revKey(id));
+}
+
+async function readComments(kv, id) {
+  const raw = await kv.get(commentsKey(id));
+  if (!raw) return { nextId: 1, round: 1, items: [] };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { nextId: 1, round: 1, items: [] };
+  }
+}
+
+/** Raw comments value, or null when the note has none (or the value is unreadable). */
+async function readCommentsOrNull(kv, id) {
+  const raw = await kv.get(commentsKey(id));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** Remove a note's current object, every snapshot, and its revision log. */
@@ -704,8 +726,22 @@ app.put('/api/files/:id', async (c) => {
   delete meta.archivedAt;
   await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
 
+  // Re-check review comments against the new revision. The save has already
+  // succeeded; nothing here may turn it into an error.
+  let triageSummary = null;
+  try {
+    const comments = await readCommentsOrNull(c.env.HISTORY, id);
+    if (comments && comments.items.length) {
+      const result = triage(comments, current, content, n);
+      await c.env.HISTORY.put(commentsKey(id), JSON.stringify(result.comments));
+      triageSummary = result.summary;
+    }
+  } catch (err) {
+    log.error('comments.triageFailed', { fileId: id, rev: n, error: String(err) });
+  }
+
   log.info('file.edit', { fileId: id, rev: n, bytes: content.length });
-  return c.json({ id, currentRev: n, revision });
+  return c.json({ id, currentRev: n, revision, triage: triageSummary });
 });
 
 app.get('/api/files/:id/revisions', async (c) => {
@@ -743,16 +779,6 @@ const MAX_COMMENTS = 500;
 const MAX_COMMENT_TEXT = 2000;
 const COMMENT_TAGS = ['fix', 'cut', 'q', 'keep', 'general'];
 const COMMENT_STATUSES = ['open', 'addressed'];
-
-async function readComments(kv, id) {
-  const raw = await kv.get(commentsKey(id));
-  if (!raw) return { nextId: 1, round: 1, items: [] };
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return { nextId: 1, round: 1, items: [] };
-  }
-}
 
 /** Loads meta and answers null unless the caller owns the note. */
 async function ownedMeta(c) {
@@ -794,8 +820,8 @@ function cleanAnchor(a) {
 
 app.get('/api/files/:id/comments', async (c) => {
   if (!(await ownedMeta(c))) return c.json({ error: 'File not found' }, 404);
-  const { round, items } = await readComments(c.env.HISTORY, c.req.param('id'));
-  return c.json({ round, items });
+  const { round, items, lastTriage } = await readComments(c.env.HISTORY, c.req.param('id'));
+  return c.json({ round, items, lastTriage });
 });
 
 app.post('/api/files/:id/comments', async (c) => {
@@ -830,9 +856,15 @@ app.post('/api/files/:id/comments', async (c) => {
     if (!anchor) return c.json({ error: 'Invalid anchor' }, 400);
     const obj = await c.env.MD_FILES.get(`${id}.md`);
     if (!obj) return c.json({ error: 'File not found' }, 404);
-    const hit = locate(await obj.text(), anchor);
+    const sourceText = await obj.text();
+    const hit = locate(sourceText, anchor);
     if (!hit) return c.json({ error: 'Anchor not found' }, 409);
-    anchor.lines = hit.lines;
+    // Context drives triage later (replacedBy is found between prefix and suffix),
+    // so never trust the client's copy of it.
+    anchor =
+      hit.start == null
+        ? { ...anchor, lines: hit.lines }
+        : anchorAt(sourceText, hit.start, hit.end);
   }
 
   const item = {
@@ -856,7 +888,8 @@ app.post('/api/files/:id/comments', async (c) => {
 
 app.patch('/api/files/:id/comments/:cid', async (c) => {
   const id = c.req.param('id');
-  if (!(await ownedMeta(c))) return c.json({ error: 'File not found' }, 404);
+  const meta = await ownedMeta(c);
+  if (!meta) return c.json({ error: 'File not found' }, 404);
   let body;
   try {
     body = await c.req.json();
@@ -876,7 +909,18 @@ app.patch('/api/files/:id/comments/:cid', async (c) => {
     item.tag = body.tag;
   }
   if (body.status !== undefined) {
-    if (!COMMENT_STATUSES.includes(body.status)) return c.json({ error: 'Invalid status' }, 400);
+    if (item.status === 'violated' || !COMMENT_STATUSES.includes(body.status)) {
+      return c.json({ error: 'Invalid status' }, 400);
+    }
+    if (item.status === 'addressed' && body.status === 'open' && item.anchor) {
+      const obj = await c.env.MD_FILES.get(`${id}.md`);
+      if (!obj) return c.json({ error: 'File not found' }, 404);
+      item.anchor = reopenAnchor(await obj.text(), item);
+      delete item.replacedBy;
+      delete item.resolvedLines;
+      delete item.resolvedRev;
+      item.rev = meta.currentRev || 0;
+    }
     item.status = body.status;
   }
   if (body.note !== undefined) item.note = cleanText(body.note);
