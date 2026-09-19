@@ -290,10 +290,10 @@ function followQuote(oldSource, newSource, newStarts, a, keep) {
  * null. `newStarts` is `lineTable(newSource)`, built once per `triage()`
  * call. `strippedRef()` lazily builds (and memoizes, for the whole
  * `triage()` call) a `stripInline(newSource)` copy plus its own line table,
- * the first time an approx anchor needs it.
+ * the first time an approx anchor needs it. `a` is the item's anchor prepared
+ * for comparison against these sources (see the CRLF handling in `triage`).
  */
-function follow(oldSource, newSource, item, newStarts, strippedRef) {
-  const a = item.anchor;
+function follow(oldSource, newSource, item, a, newStarts, strippedRef) {
   if (a.block) {
     const oldText = sliceLines(oldSource, a.lines).text;
     const span = a.lines[1] - a.lines[0];
@@ -357,15 +357,17 @@ function withoutResolution(item) {
  * what sits there now); for an item still being re-decided (a keep that stays
  * violated), fall back to re-running `replacedSpan` against the new source,
  * which also refreshes `replacedBy`.
+ * @param {string|undefined} replacedBy the item's `replacedBy`, prepared for
+ *   comparison (see the CRLF handling in `triage`)
  * @param {boolean} rerunSpan whether the `replacedSpan` fallback is allowed
  */
-function repin(newSource, newStarts, item, anchor, newRev, rerunSpan) {
+function repin(newSource, newStarts, item, anchor, replacedBy, newRev, rerunSpan) {
   const from = (item.resolvedLines || anchor.lines)[0];
-  if (item.replacedBy) {
-    const at = nearest(newStarts, findAll(newSource, item.replacedBy), from);
+  if (replacedBy) {
+    const at = nearest(newStarts, findAll(newSource, replacedBy), from);
     if (at !== -1) {
       return {
-        resolvedLines: [lineOf(newStarts, at), lineOf(newStarts, at + item.replacedBy.length - 1)],
+        resolvedLines: [lineOf(newStarts, at), lineOf(newStarts, at + replacedBy.length - 1)],
         linesRev: newRev,
       };
     }
@@ -382,14 +384,28 @@ function repin(newSource, newStarts, item, anchor, newRev, rerunSpan) {
  * @param {number} newRev
  */
 export function triage(comments, oldSource, newSource, newRev) {
+  // A browser textarea always hands back LF, so saving a CRLF note from the
+  // editor silently rewrites every line ending. Compared literally, that
+  // makes every multi-line anchor "gone": blocks and fixes would be called
+  // addressed, multi-line keeps violated. So when either side has any \r,
+  // compare \r-stripped copies of both sources (and of the stored anchor
+  // text) — removing \r never changes a line NUMBER, and the stored comments
+  // are left exactly as they are.
+  const crlf = oldSource.includes('\r') || newSource.includes('\r');
+  const noCr = (s) => (typeof s === 'string' ? s.replace(/\r/g, '') : s);
+  const oldSrc = crlf ? noCr(oldSource) : oldSource;
+  const newSrc = crlf ? noCr(newSource) : newSource;
+  const cmpAnchor = (a) =>
+    crlf ? { ...a, quote: noCr(a.quote), prefix: noCr(a.prefix), suffix: noCr(a.suffix) } : a;
+
   // Built once per call and threaded through every re-anchor below, instead
   // of re-deriving a line table (or, for an approx anchor, a stripped copy
   // of the whole note) per comment — see the F1 perf test.
-  const newStarts = lineTable(newSource);
+  const newStarts = lineTable(newSrc);
   let strippedCache = null;
   const strippedRef = () => {
     if (!strippedCache) {
-      const stripped = stripInline(newSource);
+      const stripped = stripInline(newSrc);
       strippedCache = { stripped, starts: lineTable(stripped) };
     }
     return strippedCache;
@@ -407,13 +423,15 @@ export function triage(comments, oldSource, newSource, newRev) {
 
   const items = comments.items.map((item) => {
     if (!item.anchor) return { ...item, rev: newRev };
+    const a = cmpAnchor(item.anchor);
+    const replacedBy = crlf ? noCr(item.replacedBy) : item.replacedBy;
     if (item.status === 'addressed') {
       // Status is settled; only the reported position is refreshed, so the
       // ADDRESSED section keeps pointing at the right place.
-      const moved = repin(newSource, newStarts, item, item.anchor, newRev, false);
+      const moved = repin(newSrc, newStarts, item, a, replacedBy, newRev, false);
       return { ...item, ...moved, rev: newRev };
     }
-    const found = follow(oldSource, newSource, item, newStarts, strippedRef);
+    const found = follow(oldSrc, newSrc, item, a, newStarts, strippedRef);
 
     if (found) {
       if (item.status === 'violated') {
@@ -432,22 +450,19 @@ export function triage(comments, oldSource, newSource, newRev) {
 
     if (item.status === 'violated') {
       summary.violated++;
-      const moved = repin(newSource, newStarts, item, item.anchor, newRev, true);
+      const moved = repin(newSrc, newStarts, item, a, replacedBy, newRev, true);
       return { ...item, ...moved, rev: newRev };
     }
     if (item.tag === 'q') {
-      return { ...item, anchor: linesBlock(newStarts.length, item.anchor.lines), rev: newRev };
+      return { ...item, anchor: linesBlock(newStarts.length, a.lines), rev: newRev };
     }
-    const span =
-      item.anchor.block || item.anchor.approx
-        ? null
-        : replacedSpan(newSource, item.anchor, newStarts);
+    const span = a.block || a.approx ? null : replacedSpan(newSrc, a, newStarts);
     const resolved = {
       ...item,
       rev: newRev,
       resolvedRev: newRev,
       linesRev: newRev,
-      resolvedLines: span ? span.lines : clampLines(newStarts.length, item.anchor.lines),
+      resolvedLines: span ? span.lines : clampLines(newStarts.length, a.lines),
       ...(span ? { replacedBy: span.text } : {}),
     };
     if (item.tag === 'keep') {

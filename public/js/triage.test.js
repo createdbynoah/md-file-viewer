@@ -540,6 +540,47 @@ describe('triage — I1/I2 duplicated text needs surviving context', () => {
   });
 });
 
+describe('triage — I4 CRLF sources compare as LF', () => {
+  const LF = [
+    '# Title', // 1
+    '', // 2
+    'First line of the para.', // 3
+    'Second line of the para.', // 4
+    '', // 5
+    'Tail sentence here.', // 6
+  ].join('\n');
+  const CRLF = LF.replace(/\n/g, '\r\n');
+  const twoLines = 'First line of the para.\r\nSecond line of the para.';
+  const spanning = () => {
+    const start = CRLF.indexOf(twoLines);
+    return anchorAt(CRLF, start, start + twoLines.length);
+  };
+
+  it('a block anchor is still open after a CRLF → LF save', () => {
+    const b = item('b1', 'fix', blockAnchor([3, 4], 'paragraph', 'paragraph "First line"'));
+    const r = triage(base([b]), CRLF, LF, 1);
+    expect(byId(r, 'b1')).toMatchObject({ status: 'open', carried: 1 });
+    expect(byId(r, 'b1').anchor.lines).toEqual([3, 4]);
+  });
+
+  it('a multi-line keep is not violated by the line endings alone', () => {
+    const r = triage(base([item('k1', 'keep', spanning(), { note: '' })]), CRLF, LF, 1);
+    expect(byId(r, 'k1')).toMatchObject({ status: 'open', carried: 0 });
+    expect(r.summary.violated).toBe(0);
+  });
+
+  it('a multi-line fix is carried, not addressed', () => {
+    const r = triage(base([item('c1', 'fix', spanning())]), CRLF, LF, 1);
+    expect(byId(r, 'c1')).toMatchObject({ status: 'open', carried: 1 });
+  });
+
+  it('a real edit is still caught on a CRLF note', () => {
+    const edited = CRLF.replace('Second line', 'Rewritten line');
+    const r = triage(base([item('k2', 'keep', spanning(), { note: '' })]), CRLF, edited, 1);
+    expect(byId(r, 'k2').status).toBe('violated');
+  });
+});
+
 describe('triage — F1 performance at Worker scale', () => {
   it('triages 400 items against a ~1 MB repetitive note in well under 5s', () => {
     const N = 15000;
