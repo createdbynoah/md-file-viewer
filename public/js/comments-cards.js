@@ -27,7 +27,14 @@ export function buildCard(
   { orphaned, active, onActivate, onEdit, onToggle, onDelete, diffWords, onAccept }
 ) {
   const violated = item.status === 'violated';
-  const marker = violated ? ' · violated' : orphaned ? ' · anchor not found' : '';
+  const addressed = item.status === 'addressed';
+  const marker = violated
+    ? ' · violated'
+    : addressed
+      ? ' · addressed'
+      : orphaned
+        ? ' · anchor not found'
+        : '';
   const card = el('div', { className: 'comment-card' }, [
     el('div', {
       className: 'comment-card-head',
@@ -37,7 +44,7 @@ export function buildCard(
   card.dataset.id = item.id;
   card.dataset.tag = item.tag;
   card.classList.toggle('is-active', active);
-  card.classList.toggle('is-addressed', item.status === 'addressed');
+  card.classList.toggle('is-addressed', addressed);
   card.classList.toggle('is-violated', violated);
   if (item.replace) {
     card.append(el('div', { className: 'comment-card-note', textContent: `→ ${item.replace}` }));
@@ -56,13 +63,13 @@ export function buildCard(
     });
     b.addEventListener('click', (e) => {
       e.stopPropagation();
-      fn();
+      fn?.();
     });
     return b;
   };
   const actions = violated
     ? [action('Accept change', onAccept)]
-    : item.status === 'addressed'
+    : addressed
       ? [action('Reopen', onToggle), action('Delete', onDelete, true)]
       : [action('Edit', onEdit), action('Resolve', onToggle), action('Delete', onDelete, true)];
   card.append(el('div', { className: 'comment-card-actions' }, actions));

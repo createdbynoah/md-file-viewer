@@ -123,6 +123,26 @@ describe('triaged cards', () => {
     });
     expect(card.querySelector('.comment-diff')).toBeNull();
   });
+  it('a violated card without onAccept does not throw on click', () => {
+    const card = buildCard(item({ id: 'k2', tag: 'keep', status: 'violated', replacedBy: 'x' }), {
+      orphaned: true,
+      active: false,
+      diffWords: fakeDiff,
+      ...handlers(),
+    });
+    const [accept] = card.querySelectorAll('.comment-card-actions button');
+    expect(() => accept.click()).not.toThrow();
+  });
+  it('an addressed card marks itself addressed in the head, not "anchor not found", even when orphaned', () => {
+    const card = buildCard(item({ status: 'addressed', orphaned: true }), {
+      orphaned: true,
+      active: false,
+      ...handlers(),
+    });
+    expect(card.querySelector('.comment-card-head').textContent).toBe(
+      'c1 · fix · addressed · "soon"'
+    );
+  });
 });
 
 describe('buildGeneralCard', () => {
