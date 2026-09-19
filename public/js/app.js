@@ -365,6 +365,12 @@ const comments = initComments({
   banner: reviewBanner,
   copyMenuBtn: copyFeedbackMenuBtn,
   copyMenu: copyFeedbackMenu,
+  // The folder dropdown and ••• menu each stop click propagation on their own
+  // opener button, so opening the copy ▾ menu wouldn't otherwise close them.
+  closeOtherMenus: () => {
+    folderDropdown.hidden = true;
+    closeMoreMenu();
+  },
   diffWords: (a, b) => window.Diff.diffWords(a, b),
   api,
   getNote: () => currentNote,
@@ -905,6 +911,8 @@ folderBtn.addEventListener('click', (e) => {
     folderDropdown.hidden = true;
     return;
   }
+  copyFeedbackMenu.hidden = true; // its own opener stops propagation, so close it here
+  copyFeedbackMenuBtn.setAttribute('aria-expanded', 'false');
   renderFolderDropdown();
   folderDropdown.hidden = false;
 });
@@ -1204,9 +1212,11 @@ async function saveEdit() {
     // The saved edit adds a revision; drop cached snapshots and reset the drawer.
     snapshotCache.clear();
     closeRevisions();
-    exitEditMode();
-    // The save re-triaged the review comments server-side; fetch the result.
+    // Kick off the re-triaged reload before exiting edit mode: exitEditMode's
+    // render calls comments.refresh(), which no-ops while comments.load() is
+    // in flight, so the pre-save comments never flash against the new source.
     comments.load();
+    exitEditMode();
     syncSidebar('file-edit');
   } catch (e) {
     // api() already redirected on 401; anything else is a network failure.
@@ -1519,6 +1529,8 @@ moreBtn.addEventListener('click', (e) => {
     return;
   }
   folderDropdown.hidden = true;
+  copyFeedbackMenu.hidden = true; // its own opener stops propagation, so close it here
+  copyFeedbackMenuBtn.setAttribute('aria-expanded', 'false');
   moreMenu.textContent = '';
   for (const btn of viewerHeader.querySelectorAll('[data-secondary]')) {
     if (btn.hidden) continue;

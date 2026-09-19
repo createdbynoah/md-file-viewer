@@ -17,6 +17,26 @@ const HIGHLIGHT_FOR = {
 };
 const CARD_GAP = 8;
 const canHighlight = typeof CSS !== 'undefined' && 'highlights' in CSS;
+const TRIAGE_SEEN_CAP = 50;
+
+/**
+ * Keep at most the `TRIAGE_SEEN_CAP` most-recently-dismissed `triageSeen:*`
+ * keys (value is the dismissal timestamp), dropping the oldest — same spirit
+ * as scroll-memory.js's cap, so dismissals don't accumulate forever.
+ */
+function pruneTriageSeen() {
+  const entries = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith('triageSeen:')) continue;
+    const at = Number(localStorage.getItem(key));
+    entries.push([key, Number.isFinite(at) ? at : 0]);
+  }
+  entries.sort((a, b) => a[1] - b[1]);
+  for (const [key] of entries.slice(0, Math.max(0, entries.length - TRIAGE_SEEN_CAP))) {
+    localStorage.removeItem(key);
+  }
+}
 
 function parseLines(node) {
   const [s, e] = node.dataset.line.split(',').map(Number);
@@ -194,6 +214,12 @@ export function initComments(deps) {
   const coarse = window.matchMedia('(pointer: coarse)');
   let data = { round: 1, items: [] };
   let addressedOpen = false;
+  // True while load() has an in-flight fetch; the public refresh() no-ops
+  // during this window so a caller's own render (e.g. app.js re-rendering the
+  // note on save, before the re-triaged comments are back) never repaints
+  // stale comments against the new source — load()'s own repaint() at the
+  // end runs unconditionally once the fetch settles.
+  let loading = false;
   let reviewing = false;
   let activeId = null;
   let popover = null; // composer or item view, rail/drawer layouts
@@ -436,6 +462,11 @@ export function initComments(deps) {
     if (show) barSummary.textContent = summaryLabel(summarize(data.items));
   }
 
+  // Skips the DOM rebuild (and so a screen reader re-announce of the
+  // role="status" region) when the computed banner state hasn't changed —
+  // e.g. a resize-triggered repaint while reviewing.
+  let bannerKey = null;
+
   function renderBanner() {
     const current = note();
     const t = data.lastTriage;
@@ -445,21 +476,30 @@ export function initComments(deps) {
       seen = Boolean(seenKey && localStorage.getItem(seenKey));
     } catch {}
     const unverified = Boolean(
-      current && data.items.some((i) => i.anchor && (i.rev ?? 0) < (current.currentRev || 0))
+      current &&
+      data.items.some(
+        (i) => i.anchor && typeof i.rev === 'number' && i.rev < (current.currentRev || 0)
+      )
     );
     const showRound = Boolean(t && current && t.rev === current.currentRev && !seen);
+    const hidden = !(active() && (showRound || unverified));
+    const text = hidden
+      ? ''
+      : showRound
+        ? triageLabel(t)
+        : 'Comments were not re-checked against this revision; positions may be stale.';
+    const violated = Boolean(showRound && t && t.violated);
+    // `seenKey` folds in the note id + triaged rev, so a note switch that
+    // happens to land on the same hidden/text/violated combo still rebuilds
+    // (and rebinds Dismiss to the new note's key) instead of being skipped.
+    const key = JSON.stringify([seenKey, hidden, text, violated, showRound]);
+    if (key === bannerKey) return;
+    bannerKey = key;
     banner.replaceChildren();
-    banner.hidden = !(active() && (showRound || unverified));
-    if (banner.hidden) return;
-    banner.classList.toggle('has-violations', Boolean(showRound && t.violated));
-    banner.append(
-      el('span', {
-        className: 'review-banner-text',
-        textContent: showRound
-          ? triageLabel(t)
-          : 'Comments were not re-checked against this revision; positions may be stale.',
-      })
-    );
+    banner.hidden = hidden;
+    if (hidden) return;
+    banner.classList.toggle('has-violations', violated);
+    banner.append(el('span', { className: 'review-banner-text', textContent: text }));
     if (showRound) {
       const dismiss = el('button', {
         type: 'button',
@@ -468,9 +508,12 @@ export function initComments(deps) {
       });
       dismiss.addEventListener('click', () => {
         try {
-          localStorage.setItem(seenKey, '1');
+          localStorage.setItem(seenKey, String(Date.now()));
+          pruneTriageSeen();
         } catch {}
-        renderBanner();
+        // Not renderBanner() alone: hiding the banner reflows the article, so
+        // the rail needs to re-measure against the new layout too.
+        repaint();
       });
       banner.append(dismiss);
     }
@@ -482,9 +525,13 @@ export function initComments(deps) {
     if (!composing) closeFloating({ keepList: true });
     resolveTargets();
     paintHighlights();
+    // Before renderList(): showing/hiding the banner reflows the article (a
+    // normal-flow sibling above it), which moves every anchor's rect. The
+    // rail measures those rects while placing cards, so the banner's final
+    // hidden state must land first or every card is off by the banner's height.
+    renderBanner();
     renderList();
     renderBar();
-    renderBanner();
     copyBtn.hidden = !(note() && note().owned && data.items.length);
     copyMenuBtn.hidden = copyBtn.hidden;
   }
@@ -538,6 +585,7 @@ export function initComments(deps) {
   }
 
   async function load() {
+    loading = true;
     data = { round: 1, items: [] };
     activeId = null;
     addressedOpen = false;
@@ -549,6 +597,7 @@ export function initComments(deps) {
         if (res.ok && note() && note().id === current.id) data = await res.json();
       } catch {}
     }
+    loading = false;
     repaint();
   }
 
@@ -913,6 +962,10 @@ export function initComments(deps) {
   copyMenuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (!copyMenu.hidden) return closeCopyMenu();
+    // The folder dropdown and ••• menu each stop propagation on their own
+    // opener, so the outside-click listener that would otherwise close them
+    // never fires; close them ourselves instead.
+    deps.closeOtherMenus?.();
     copyMenu.replaceChildren(
       ...[
         ['Open only', undefined],
@@ -937,6 +990,13 @@ export function initComments(deps) {
     copyMenuBtn.setAttribute('aria-expanded', 'true');
   });
   document.addEventListener('click', closeCopyMenu);
+  const onCopyMenuKeydown = (e) => {
+    if (e.key !== 'Escape' || copyMenu.hidden) return;
+    closeCopyMenu();
+    copyMenuBtn.focus();
+  };
+  copyMenuBtn.addEventListener('keydown', onCopyMenuKeydown);
+  copyMenu.addEventListener('keydown', onCopyMenuKeydown);
   listBtn.addEventListener('click', () => {
     setDrawer(drawer.hidden);
     renderList();
@@ -969,9 +1029,13 @@ export function initComments(deps) {
       closeCopyMenu();
       if (gutterBtn) gutterBtn.hidden = true;
       activeId = null;
+      addressedOpen = false;
       repaint();
     },
-    refresh: repaint,
+    // No-ops while a load() fetch is in flight — see `loading` above.
+    refresh: () => {
+      if (!loading) repaint();
+    },
     setReviewMode,
     isReviewing: () => reviewing,
   };
