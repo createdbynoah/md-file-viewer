@@ -1,111 +1,189 @@
 // Re-checks every review comment against a new revision. Pure and shared: the
 // worker runs it inside PUT /api/files/:id, the UAT seed uses it to build a
 // round-2 scenario, and the tests drive it directly.
-import { anchorAt, blockAnchor, findAll, lineAt, locate, sliceLines, wsRegex } from './anchor.js';
+import {
+  anchorAt,
+  blockAnchor,
+  contextScore,
+  findAll,
+  lineOf,
+  lineTable,
+  locate,
+  sliceLines,
+  wsRegex,
+} from './anchor.js';
 
 const MAX_REPLACED = 2000;
 
-/** Drop inline markdown markers so a rendered quote can be matched. Never touches newlines. */
+/**
+ * Drop inline markdown markers so a rendered quote can be matched. Never
+ * touches newlines. `_`/`__` are emphasis delimiters only when NOT
+ * intra-word — CommonMark disables underscore emphasis inside a word, so an
+ * identifier like `config_max_retries` must survive stripping unchanged
+ * (only a genuine `_emph_` delimiter pair is removed).
+ */
 export function stripInline(text) {
-  return text.replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1').replace(/(\*\*|__|~~|\*|_|`)/g, '');
+  const noLinks = text.replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1');
+  const noUnderscore = noLinks.replace(/_{1,2}/g, (m, offset, str) => {
+    const isWord = (c) => c !== undefined && /\w/.test(c);
+    return isWord(str[offset - 1]) && isWord(str[offset + m.length]) ? m : '';
+  });
+  return noUnderscore.replace(/(\*\*|~~|\*|`)/g, '');
 }
 
-const lineCount = (source) => lineAt(source, source.length);
-
-function clampLines(source, [s, e]) {
-  const max = lineCount(source);
-  const start = Math.min(Math.max(s, 1), max);
-  return [start, Math.min(Math.max(e, start), max)];
+function clampLines(maxLines, [s, e]) {
+  const start = Math.min(Math.max(s, 1), maxLines);
+  return [start, Math.min(Math.max(e, start), maxLines)];
 }
 
-function linesBlock(source, lines) {
-  const [s, e] = clampLines(source, lines);
+function linesBlock(maxLines, lines) {
+  const [s, e] = clampLines(maxLines, lines);
   return blockAnchor([s, e], 'lines', `lines ${s}–${e}`);
 }
 
-function nearest(source, offsets, line) {
-  let best = null;
-  for (const at of offsets) {
-    const dist = Math.abs(lineAt(source, at) - line);
-    if (!best || dist < best.dist) best = { at, dist };
-  }
-  return best ? best.at : -1;
+/** Regenerate a block anchor's `lines` (and, for a `lines`-kind block, its label). */
+function withBlockLines(anchor, s, e) {
+  const block =
+    anchor.block.kind === 'lines' ? { kind: 'lines', label: `lines ${s}–${e}` } : anchor.block;
+  return { ...anchor, lines: [s, e], block };
 }
 
-/** The new text sitting between an anchor's surviving prefix and suffix, or null. */
-export function replacedSpan(newSource, anchor) {
-  if (!anchor.prefix && !anchor.suffix) return null;
-  const locate1 = (text) => nearest(newSource, findAll(newSource, text), anchor.lines[0]);
-
-  // The quote itself is captured whitespace-trimmed, so a boundary space next
-  // to it lives in prefix/suffix. When a selection deliberately eats that
-  // boundary space too (e.g. cutting " trailing clause." including the
-  // leading space), the space vanishes from the new source along with the
-  // quote, and the literal prefix/suffix no longer matches even though the
-  // surviving text plainly shows nothing replaced it. Retry with the
-  // boundary whitespace trimmed before giving up.
-  let prefix = anchor.prefix;
-  let from = prefix ? locate1(prefix) : 0;
-  if (prefix && from === -1) {
-    const trimmed = prefix.replace(/\s+$/, '');
-    if (trimmed && trimmed !== prefix) {
-      from = locate1(trimmed);
-      if (from !== -1) prefix = trimmed;
+/** The item in `items` whose `keyFn(item)` line is closest to `line`, in one pass. */
+function pickNearest(starts, items, line, keyFn) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const it of items) {
+    const dist = Math.abs(lineOf(starts, keyFn(it)) - line);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = it;
     }
   }
-  if (from === -1) return null;
+  return best;
+}
 
-  const start = from + prefix.length;
-  let suffix = anchor.suffix;
-  let end = suffix ? newSource.indexOf(suffix, start) : newSource.length;
-  if (suffix && end === -1) {
-    const trimmed = suffix.replace(/^\s+/, '');
-    if (trimmed && trimmed !== suffix) end = newSource.indexOf(trimmed, start);
+/** Offset in `offsets` nearest to `line`, via a `lineTable`, or -1 when empty. */
+function nearest(starts, offsets, line) {
+  const best = pickNearest(starts, offsets, line, (x) => x);
+  return best === null ? -1 : best;
+}
+
+/**
+ * The new text sitting between an anchor's surviving prefix and suffix, or
+ * null when a side can't be pinned down in `newSource`. The quote itself is
+ * captured whitespace-trimmed, so a boundary space next to it lives in
+ * `prefix`/`suffix`; search on the trimmed boundary (nearest the old line
+ * for the prefix) and then `.trim()` the extracted span, so a boundary space
+ * that did or didn't survive never leaks into the reported replacement — a
+ * genuine full deletion still yields `''` rather than a stray space.
+ * @param {number[]} [starts] a `lineTable(newSource)` result, when the
+ *   caller already has one.
+ */
+export function replacedSpan(newSource, anchor, starts = lineTable(newSource)) {
+  if (!anchor.prefix && !anchor.suffix) return null;
+
+  const prefixTrimmed = anchor.prefix.replace(/\s+$/, '');
+  let start;
+  if (anchor.prefix === '') {
+    start = 0;
+  } else if (!prefixTrimmed) {
+    // prefix was present but whitespace-only: no real content to pin against.
+    return null;
+  } else {
+    const at = nearest(starts, findAll(newSource, prefixTrimmed), anchor.lines[0]);
+    if (at === -1) return null;
+    start = at + prefixTrimmed.length;
   }
-  if (end === -1 || end - start > MAX_REPLACED) return null;
+
+  const suffixTrimmed = anchor.suffix.replace(/^\s+/, '');
+  let end;
+  if (anchor.suffix === '') {
+    end = newSource.length;
+  } else if (!suffixTrimmed) {
+    return null;
+  } else {
+    const idx = newSource.indexOf(suffixTrimmed, start);
+    if (idx === -1) return null;
+    end = idx;
+  }
+  if (end < start) end = start;
+  if (end - start > MAX_REPLACED) return null;
+
   return {
-    text: newSource.slice(start, end),
-    lines: [lineAt(newSource, start), lineAt(newSource, Math.max(start, end - 1))],
+    text: newSource.slice(start, end).trim(),
+    lines: [lineOf(starts, start), lineOf(starts, Math.max(start, end - 1))],
   };
 }
 
-/** Where an anchor sits in the new source: { anchor } when found, else null. */
-function follow(oldSource, newSource, item) {
+/**
+ * `keep` requires a byte-identical quote (no ws/typographic tolerance). If it
+ * occurs more than once, "found" additionally requires that at least one
+ * occurrence's literal neighboring text still matches the anchor's stored
+ * prefix or suffix — otherwise a duplicate elsewhere in the note would mask
+ * an edit to the specific occurrence the reviewer commented on.
+ */
+function followKeep(newSource, newStarts, a) {
+  const hits = findAll(newSource, a.quote);
+  if (hits.length === 0) return null;
+  if (hits.length === 1) {
+    const start = hits[0];
+    return { anchor: anchorAt(newSource, start, start + a.quote.length, newStarts) };
+  }
+  let best = null;
+  for (const start of hits) {
+    const end = start + a.quote.length;
+    const score = contextScore(newSource, start, end, a);
+    if (score === 0) continue;
+    const dist = Math.abs(lineOf(newStarts, start) - a.lines[0]);
+    if (!best || score > best.score || (score === best.score && dist < best.dist)) {
+      best = { start, end, score, dist };
+    }
+  }
+  return best ? { anchor: anchorAt(newSource, best.start, best.end, newStarts) } : null;
+}
+
+/**
+ * Where an anchor sits in the new source: `{ anchor }` when found, else
+ * null. `newStarts` is `lineTable(newSource)`, built once per `triage()`
+ * call. `strippedRef()` lazily builds (and memoizes, for the whole
+ * `triage()` call) a `stripInline(newSource)` copy plus its own line table,
+ * the first time an approx anchor needs it.
+ */
+function follow(oldSource, newSource, item, newStarts, strippedRef) {
   const a = item.anchor;
   if (a.block) {
-    const text = sliceLines(oldSource, a.lines).text;
-    const hits = findAll(newSource, text);
+    const oldText = sliceLines(oldSource, a.lines).text;
+    const span = a.lines[1] - a.lines[0];
+    if (oldText.trim() === '') {
+      // Nothing to compare a blank block against — findAll('') would return
+      // no hits and falsely say it's gone. Treat it as still there, at its
+      // old position clamped to the new source.
+      const [s, e] = clampLines(newStarts.length, a.lines);
+      return { anchor: withBlockLines(a, s, e) };
+    }
+    const hits = findAll(newSource, oldText);
     const atLineStart = hits.filter((i) => i === 0 || newSource[i - 1] === '\n');
-    const at = nearest(newSource, atLineStart.length ? atLineStart : hits, a.lines[0]);
+    const at = nearest(newStarts, atLineStart.length ? atLineStart : hits, a.lines[0]);
     if (at === -1) return null;
-    const first = lineAt(newSource, at);
-    return { anchor: { ...a, lines: [first, first + (a.lines[1] - a.lines[0])] } };
+    const first = lineOf(newStarts, at);
+    const last = Math.min(first + span, newStarts.length);
+    return { anchor: withBlockLines(a, first, last) };
   }
   if (a.approx) {
-    const stripped = stripInline(newSource);
-    const hits = [...stripped.matchAll(wsRegex(a.quote))];
+    const { stripped, starts: strippedStarts } = strippedRef();
+    const hits = [...stripped.matchAll(wsRegex(stripInline(a.quote)))];
     if (!hits.length) return null;
-    const m = hits.find(
-      (h) =>
-        h.index ===
-        nearest(
-          stripped,
-          hits.map((h2) => h2.index),
-          a.lines[0]
-        )
-    );
+    const m = pickNearest(strippedStarts, hits, a.lines[0], (h) => h.index);
     return {
       anchor: {
         ...a,
-        lines: [lineAt(stripped, m.index), lineAt(stripped, m.index + m[0].length - 1)],
+        lines: [lineOf(strippedStarts, m.index), lineOf(strippedStarts, m.index + m[0].length - 1)],
       },
     };
   }
-  // keep promises the agent "byte-identical": whitespace or typographic
-  // equivalence is good enough to carry a fix, not to honor a keep.
-  if (item.tag === 'keep' && !findAll(newSource, a.quote).length) return null;
+  if (item.tag === 'keep') return followKeep(newSource, newStarts, a);
   const hit = locate(newSource, a);
-  return hit ? { anchor: anchorAt(newSource, hit.start, hit.end) } : null;
+  return hit ? { anchor: anchorAt(newSource, hit.start, hit.end, newStarts) } : null;
 }
 
 function withoutResolution(item) {
@@ -123,6 +201,19 @@ function withoutResolution(item) {
  * @param {number} newRev
  */
 export function triage(comments, oldSource, newSource, newRev) {
+  // Built once per call and threaded through every re-anchor below, instead
+  // of re-deriving a line table (or, for an approx anchor, a stripped copy
+  // of the whole note) per comment — see the F1 perf test.
+  const newStarts = lineTable(newSource);
+  let strippedCache = null;
+  const strippedRef = () => {
+    if (!strippedCache) {
+      const stripped = stripInline(newSource);
+      strippedCache = { stripped, starts: lineTable(stripped) };
+    }
+    return strippedCache;
+  };
+
   const summary = {
     rev: newRev,
     round: comments.round,
@@ -135,7 +226,7 @@ export function triage(comments, oldSource, newSource, newRev) {
 
   const items = comments.items.map((item) => {
     if (!item.anchor || item.status === 'addressed') return { ...item, rev: newRev };
-    const found = follow(oldSource, newSource, item);
+    const found = follow(oldSource, newSource, item, newStarts, strippedRef);
 
     if (found) {
       if (item.status === 'violated') {
@@ -157,15 +248,17 @@ export function triage(comments, oldSource, newSource, newRev) {
       return { ...item, rev: newRev };
     }
     if (item.tag === 'q') {
-      return { ...item, anchor: linesBlock(newSource, item.anchor.lines), rev: newRev };
+      return { ...item, anchor: linesBlock(newStarts.length, item.anchor.lines), rev: newRev };
     }
     const span =
-      item.anchor.block || item.anchor.approx ? null : replacedSpan(newSource, item.anchor);
+      item.anchor.block || item.anchor.approx
+        ? null
+        : replacedSpan(newSource, item.anchor, newStarts);
     const resolved = {
       ...item,
       rev: newRev,
       resolvedRev: newRev,
-      resolvedLines: span ? span.lines : clampLines(newSource, item.anchor.lines),
+      resolvedLines: span ? span.lines : clampLines(newStarts.length, item.anchor.lines),
       ...(span ? { replacedBy: span.text } : {}),
     };
     if (item.tag === 'keep') {
@@ -180,16 +273,20 @@ export function triage(comments, oldSource, newSource, newRev) {
   return { comments: { ...comments, round: summary.round, items, lastTriage: summary }, summary };
 }
 
-/** Anchor to use when an addressed comment is reopened against `source`. */
-export function reopenAnchor(source, item) {
+/**
+ * Anchor to use when an addressed comment is reopened against `source`.
+ * @param {number[]} [starts] a `lineTable(source)` result, when the caller
+ *   already has one.
+ */
+export function reopenAnchor(source, item, starts = lineTable(source)) {
   if (locate(source, item.anchor)) return item.anchor;
   if (item.replacedBy) {
     const at = nearest(
-      source,
+      starts,
       findAll(source, item.replacedBy),
       (item.resolvedLines || item.anchor.lines)[0]
     );
-    if (at !== -1) return anchorAt(source, at, at + item.replacedBy.length);
+    if (at !== -1) return anchorAt(source, at, at + item.replacedBy.length, starts);
   }
-  return linesBlock(source, item.resolvedLines || item.anchor.lines);
+  return linesBlock(starts.length, item.resolvedLines || item.anchor.lines);
 }

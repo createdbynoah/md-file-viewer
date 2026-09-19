@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { captureAnchor, blockAnchor } from './anchor.js';
+import { captureAnchor, blockAnchor, anchorAt } from './anchor.js';
 import { triage, reopenAnchor, replacedSpan, stripInline } from './triage.js';
 
 const V1 = [
@@ -146,9 +146,180 @@ describe('triage — q, general, addressed, block, approx', () => {
   });
 });
 
+describe('triage — q found, still-violated keep, open general', () => {
+  it('q found → re-anchored, stays open, never carries', () => {
+    const c = base([item('q1', 'q', exact([12, 12], 'soon'))]);
+    const r = triage(c, V1, 'x\n' + V1, 1);
+    expect(byId(r, 'q1')).toMatchObject({ status: 'open', carried: 0, rev: 1 });
+    expect(byId(r, 'q1').anchor.lines).toEqual([13, 13]);
+    expect(byId(r, 'q1').anchor.block).toBeUndefined();
+    expect(r.summary).toMatchObject({ carried: 0, addressed: 0, violated: 0, round: 2 });
+  });
+
+  it('a violated keep that is still gone stays violated and counts toward summary.violated', () => {
+    const v2 = V1.replace('200 ms', '250 ms');
+    const first = triage(
+      base([item('k6', 'keep', exact([12, 12], 'p95 under 200 ms'), { note: '' })]),
+      V1,
+      v2,
+      1
+    );
+    expect(byId(first, 'k6').status).toBe('violated');
+    const still = V1.replace('200 ms', '300 ms'); // different edit, quote still not restored
+    const second = triage(first.comments, v2, still, 2);
+    expect(byId(second, 'k6')).toMatchObject({ status: 'violated', rev: 2 });
+    expect(second.summary).toMatchObject({ violated: 1, restored: 0, round: 3 });
+  });
+
+  it('an open anchorless general item is untouched but its rev bumps and it counts as open work', () => {
+    const c = base([
+      { id: 'g1', tag: 'general', note: 'Tone', rev: 0, status: 'open', carried: 0 },
+    ]);
+    const r = triage(c, V1, V1 + '\nmore', 1);
+    expect(byId(r, 'g1')).toMatchObject({ tag: 'general', note: 'Tone', status: 'open', rev: 1 });
+    expect(r.comments.round).toBe(2); // round bumped: the anchorless open item still counts as work
+  });
+});
+
+describe('triage — F2 approx anchors survive intra-word underscores', () => {
+  const SRC = 'Intro.\n\nSet the **config_max_retries** value before deploy.';
+  it('an approx fix on an underscored identifier survives an unrelated prepend, unchanged', () => {
+    const anchor = captureAnchor(SRC, [3, 3], 'the config_max_retries value');
+    expect(anchor.approx).toBe(true);
+    const c = base([item('u1', 'fix', anchor)]);
+    const r = triage(c, SRC, 'x\n' + SRC, 1);
+    expect(byId(r, 'u1')).toMatchObject({ status: 'open', carried: 1, rev: 1 });
+    expect(byId(r, 'u1').anchor.lines).toEqual([4, 4]);
+  });
+  it('is addressed when the identifier itself is renamed', () => {
+    const anchor = captureAnchor(SRC, [3, 3], 'the config_max_retries value');
+    const c = base([item('u2', 'fix', anchor)]);
+    const r = triage(c, SRC, SRC.replace('config_max_retries', 'max_retry_count'), 1);
+    expect(byId(r, 'u2').status).toBe('addressed');
+  });
+});
+
+describe('triage — F3 blank block anchors', () => {
+  // V1 line 11 is the blank line between the table and the latency paragraph.
+  // There's no text to search for, so a blank block can't be *relocated* —
+  // it's simply treated as still there at its old line number, clamped to
+  // whatever range the new source actually has.
+  it('a block anchor over a blank line is found (not gone) when the rest of the note is untouched', () => {
+    const blank = item('bl1', 'fix', blockAnchor([11, 11], 'blank', 'blank line'));
+    const r = triage(base([blank]), V1, V1 + '\ntrailing extra line', 1);
+    expect(byId(r, 'bl1')).toMatchObject({ status: 'open', carried: 1 });
+    expect(byId(r, 'bl1').anchor.lines).toEqual([11, 11]);
+  });
+  it('clamps a blank block anchor to the shrunken new source instead of losing it', () => {
+    const blank = item('bl4', 'fix', blockAnchor([11, 11], 'blank', 'blank line'));
+    const r = triage(base([blank]), V1, 'a\nb\nc', 1);
+    expect(byId(r, 'bl4')).toMatchObject({ status: 'open', carried: 1 });
+    expect(byId(r, 'bl4').anchor.lines).toEqual([3, 3]);
+  });
+});
+
+describe('triage — F4 keep with duplicate text', () => {
+  const DUPE = [
+    'Intro line one.', // 1
+    'Policy: retention is 30 days.', // 2 (anchored)
+    'End of policy section.', // 3
+    '', // 4
+    'Notes: retention is 30 days.', // 5 (twin, never anchored)
+    'End of notes.', // 6
+  ].join('\n');
+  const dupeAnchor = () => captureAnchor(DUPE, [2, 2], 'retention is 30 days.');
+
+  it('the anchored occurrence being edited is violated even though a twin survives', () => {
+    const c = base([item('kd1', 'keep', dupeAnchor(), { note: '' })]);
+    // The quote text at line 2 is untouched, but its immediate context is
+    // edited on both sides, so the live context at that spot no longer
+    // matches the stored anchor — and the twin at line 5 never matched it
+    // either, so neither surviving hit has a matching context.
+    const edited = DUPE.replace('Policy: retention', 'Rule: retention').replace(
+      'End of policy section.',
+      'Close of rules.'
+    );
+    const r = triage(c, DUPE, edited, 1);
+    expect(byId(r, 'kd1').status).toBe('violated');
+    expect(r.summary.violated).toBe(1);
+  });
+
+  it('re-anchors to the right copy by context when lines shift and nothing is edited', () => {
+    const c = base([item('kd2', 'keep', dupeAnchor(), { note: '' })]);
+    const shifted = 'Prepended.\n\n' + DUPE;
+    const r = triage(c, DUPE, shifted, 1);
+    expect(byId(r, 'kd2')).toMatchObject({ status: 'open', carried: 0 });
+    expect(byId(r, 'kd2').anchor.lines).toEqual([4, 4]);
+  });
+});
+
+describe('triage — F6 block anchor line-label regeneration and clamping', () => {
+  it('a lines-kind block anchor regenerates its label when it moves', () => {
+    const linesAnchor = blockAnchor([12, 12], 'lines', 'lines 12–12');
+    const r = triage(base([item('bl2', 'q', linesAnchor)]), V1, 'x\n' + V1, 1);
+    expect(byId(r, 'bl2').anchor).toMatchObject({
+      lines: [13, 13],
+      block: { kind: 'lines', label: 'lines 13–13' },
+    });
+  });
+  it('clamps a q fallback block to the shrunken new source', () => {
+    const c = base([item('bl3', 'q', exact([12, 12], 'soon'))]);
+    const shrunk = 'one\ntwo';
+    const r = triage(c, V1, shrunk, 1);
+    expect(byId(r, 'bl3').anchor).toMatchObject({
+      lines: [2, 2],
+      block: { kind: 'lines', label: 'lines 2–2' },
+    });
+  });
+});
+
+describe('triage — F1 performance at Worker scale', () => {
+  it('triages 400 items against a ~1 MB repetitive note in well under 1.5s', () => {
+    const N = 15000;
+    const TAIL = 'consectetur adipiscing elit sed do eiusmod tempor';
+    const lines = [];
+    for (let i = 0; i < N; i++) lines.push(`${TAIL} MARK_${i}_END`);
+    const src = lines.join('\n');
+
+    const items = [];
+    const editedRows = [];
+    const step = Math.floor((N * 0.6) / 300);
+    for (let k = 0; k < 300; k++) {
+      const row = 1 + k * step;
+      editedRows.push(row);
+      const needle = `MARK_${row}_END`;
+      const start = src.indexOf(needle);
+      items.push(item(`e${k}`, 'fix', anchorAt(src, start, start + needle.length)));
+    }
+    const baseFound = Math.floor(N * 0.8);
+    for (let k = 0; k < 100; k++) {
+      const row = baseFound + k * 3;
+      const needle = `MARK_${row}_END`;
+      const start = src.indexOf(needle);
+      items.push(item(`f${k}`, 'fix', anchorAt(src, start, start + needle.length)));
+    }
+
+    const comments = base(items);
+    let newSrc = src;
+    for (const row of editedRows) newSrc = newSrc.replace(`MARK_${row}_END`, `CHANGED_${row}_DONE`);
+
+    const t0 = performance.now();
+    const r = triage(comments, src, newSrc, 2);
+    const elapsed = performance.now() - t0;
+
+    expect(r.summary.addressed).toBe(300);
+    expect(r.summary.carried).toBe(100);
+    expect(elapsed).toBeLessThan(1500);
+  });
+});
+
 describe('helpers', () => {
   it('stripInline removes emphasis, code ticks and link syntax but never newlines', () => {
     expect(stripInline('a **b** _c_ `d` [e](http://x) ~~f~~\n![g](h.png)')).toBe('a b c d e f\ng');
+  });
+  it('stripInline keeps intra-word underscores (identifiers) but strips real emphasis', () => {
+    expect(stripInline('snake_case_name')).toBe('snake_case_name');
+    expect(stripInline('_emph_')).toBe('emph');
   });
   it('replacedSpan needs prefix then suffix within reach', () => {
     const a = exact([12, 12], 'soon');

@@ -36,8 +36,20 @@ function lineStartsFor(source) {
   return startsMemo.starts;
 }
 
+/**
+ * Public entry point to the memoized line-starts table: `starts[n]` is the
+ * offset of line `n + 1`, and `starts.length` is the source's line count.
+ * Callers doing many line lookups against the same source (triage re-
+ * anchoring hundreds of comments) should build this once and thread it
+ * through `lineOf`/`anchorAt` rather than re-deriving line numbers per hit.
+ * @returns {number[]}
+ */
+export function lineTable(source) {
+  return lineStartsFor(source);
+}
+
 /** 1-based line containing `offset`, via binary search over `lineStarts`. */
-function lineOf(starts, offset) {
+export function lineOf(starts, offset) {
   let lo = 0;
   let hi = starts.length - 1;
   while (lo < hi) {
@@ -105,15 +117,17 @@ export function findAll(source, quote) {
 
 /**
  * Exact anchor for the source substring [start, end).
+ * @param {number[]} [starts] a `lineTable(source)` result, when the caller
+ *   already has one — avoids re-deriving it per call.
  * @returns {Anchor}
  */
-export function anchorAt(source, start, end) {
+export function anchorAt(source, start, end, starts = lineTable(source)) {
   return {
     quote: source.slice(start, end),
     approx: false,
     prefix: source.slice(Math.max(0, start - CONTEXT_LEN), start),
     suffix: source.slice(end, end + CONTEXT_LEN),
-    lines: [lineAt(source, start), lineAt(source, end - 1)],
+    lines: [lineOf(starts, start), lineOf(starts, Math.max(start, end - 1))],
   };
 }
 
@@ -146,7 +160,13 @@ export function blockAnchor(lines, kind, label) {
   return { quote: '', approx: false, prefix: '', suffix: '', lines, block: { kind, label } };
 }
 
-function contextScore(source, start, end, anchor) {
+/**
+ * How well an anchor's stored prefix/suffix literally match the text
+ * surrounding [start, end) in `source`. Used both to disambiguate `locate()`
+ * hits and, in triage, to pick the right occurrence among duplicate `keep`
+ * text.
+ */
+export function contextScore(source, start, end, anchor) {
   let score = 0;
   if (anchor.prefix && source.slice(start - anchor.prefix.length, start) === anchor.prefix)
     score += 2;
