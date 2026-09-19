@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { captureAnchor, blockAnchor, anchorAt } from './anchor.js';
 import { triage, reopenAnchor, replacedSpan, stripInline } from './triage.js';
+import { formatFeedback } from './feedback-format.js';
 
 const V1 = [
   '# Rollout plan', // 1
@@ -687,6 +688,125 @@ describe('triage — F1 performance at Worker scale', () => {
     // exact fixture (>120s measured via a standalone repro), so 5s vs.
     // "minutes" is not a meaningfully weaker regression guard.
     expect(elapsed).toBeLessThan(5000);
+  });
+});
+
+describe('triage + formatFeedback — M8 three rounds end to end', () => {
+  const E1 = [
+    '# Launch brief', // 1
+    '', // 2
+    'We will ship to all customers in a single release.', // 3
+    'Latency target: p95 under 200 ms.', // 4
+    'Rollback is a one-line flag flip.', // 5
+    '', // 6
+    'The beta ends soon. Marketing is ready.', // 7
+    '', // 8
+    '## Costs', // 9
+    '', // 10
+    '| Item | Monthly |', // 11
+    '| --- | --- |', // 12
+    '| Workers | $5 |', // 13
+    '', // 14
+    'We track **error budget** burn weekly.', // 15
+  ].join('\n');
+  const at = (lines, text) => captureAnchor(E1, lines, text);
+  const round1 = {
+    nextId: 8,
+    round: 1,
+    items: [
+      item('c1', 'fix', at([3, 3], 'all customers in a single release'), { note: 'Stage it' }),
+      item('c2', 'cut', at([7, 7], 'Marketing is ready.'), { note: '' }),
+      item('k3', 'keep', at([4, 4], 'p95 under 200 ms'), { note: '' }),
+      item('c4', 'q', at([5, 5], 'one-line flag flip'), { note: 'Which flag?' }),
+      item('c5', 'fix', blockAnchor([11, 13], 'table', 'table under "Costs"'), { note: 'Add VAT' }),
+      item('c6', 'fix', at([15, 15], 'track error budget burn'), { note: 'Define it' }),
+      { id: 'c7', tag: 'general', note: 'Too salesy', rev: 0, status: 'open', carried: 0 },
+    ],
+  };
+  // Two lines prepended (so every L moves), the fix applied, the keep
+  // violated, and the sentence NEXT TO the cut rewritten without touching it.
+  const E2 = E1.replace('# Launch brief', '# Launch brief\n\n> Draft for review.')
+    .replace('all customers in a single release', 'customers in three stages')
+    .replace('200 ms', '250 ms')
+    .replace('The beta ends soon.', 'The beta ends on 1 March.');
+  // One more line prepended; nothing else touched.
+  const E3 = E2.replace('> Draft for review.', '> Draft for review.\n> Second reviewer.');
+
+  const reopen = (comments, id, source) => ({
+    ...comments,
+    items: comments.items.map((i) => {
+      if (i.id !== id) return i;
+      const next = { ...i, anchor: reopenAnchor(source, i), status: 'open', carried: 0, rev: 1 };
+      delete next.replacedBy;
+      delete next.resolvedLines;
+      delete next.resolvedRev;
+      delete next.linesRev;
+      return next;
+    }),
+  });
+
+  it('round 2: only the delta is exported, at the lines of the new revision', () => {
+    const r = triage(round1, E1, E2, 1);
+    expect(r.summary).toEqual({
+      rev: 1,
+      round: 2,
+      addressed: 1,
+      carried: 3, // the cut, the table block and the approx fix
+      violated: 1,
+      restored: 0,
+    });
+    expect(byId(r, 'c1')).toMatchObject({
+      status: 'addressed',
+      replacedBy: 'customers in three stages',
+      resolvedLines: [5, 5],
+      linesRev: 1,
+    });
+    expect(byId(r, 'c5').anchor.lines).toEqual([13, 15]);
+
+    const out = formatFeedback(r.comments, E2, { title: 'Launch brief', rev: 1 });
+    expect(out.split('\n')[0]).toBe('# feedback · "Launch brief" · rev 1 · round 2');
+    expect(out).toContain(
+      'VIOLATED — kept text was changed; restore it\nk3 L6 "p95 under 200 ms" (now "p95 under 250 ms")'
+    );
+    expect(out).toContain('c4 q L7 "one-line flag flip"');
+    expect(out).toContain('c2 cut L9 "Marketing is ready." (carried: unchanged since round 1)');
+    expect(out).toContain('c5 fix L13-15 [table under "Costs"] (carried: unchanged since round 1)');
+    expect(out).toContain('c6 fix L17 ~"track error budget burn"');
+    expect(out).toContain('GENERAL\n  Too salesy');
+    expect(out).not.toContain('c1 '); // addressed: dropped from the delta
+    expect(out).not.toContain('KEEP\n'); // the only keep is violated, not open
+  });
+
+  it('round 3: a reopened comment and one created in round 2 carry from round 2', () => {
+    const first = triage(round1, E1, E2, 1);
+    const withReopen = reopen(first.comments, 'c1', E2);
+    const created = item('c8', 'fix', captureAnchor(E2, [5, 5], 'three stages'), {
+      note: 'Name the stages',
+      rev: 1,
+    });
+    const round2 = { ...withReopen, nextId: 9, items: [...withReopen.items, created] };
+    expect(round2.items[0]).toMatchObject({ status: 'open', carried: 0 });
+    expect(round2.items[0].anchor.quote).toBe('customers in three stages');
+
+    const second = triage(round2, E2, E3, 2);
+    expect(second.summary).toMatchObject({ round: 3, addressed: 0, violated: 1, restored: 0 });
+    expect(byId(second, 'k3')).toMatchObject({
+      status: 'violated',
+      resolvedLines: [7, 7], // re-pinned: one more line was prepended
+      linesRev: 2,
+    });
+
+    const out = formatFeedback(second.comments, E3, { title: 'Launch brief', rev: 2 });
+    expect(out.split('\n')[0]).toBe('# feedback · "Launch brief" · rev 2 · round 3');
+    expect(out).toContain('k3 L7 "p95 under 200 ms" (now "p95 under 250 ms")');
+    // created and reopened in round 2 → "since round 2"; untouched since round 1 → "since round 1"
+    expect(out).toContain(
+      'c1 fix L6 "customers in three stages" (carried: unchanged since round 2)'
+    );
+    expect(out).toContain('c8 fix L6 "three stages"');
+    expect(out).toContain('(carried: unchanged since round 2)\n  Name the stages');
+    expect(out).toContain('c2 cut L10 "Marketing is ready." (carried: unchanged since round 1)');
+    expect(out).toContain('c5 fix L14-16 [table under "Costs"] (carried: unchanged since round 1)');
   });
 });
 
