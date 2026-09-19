@@ -3,6 +3,8 @@ import { getCookie, deleteCookie } from 'hono/cookie';
 import { createLogger } from './logger.js';
 import { seedScenarios } from './seed.js';
 import { verifyAccessJwt } from './auth.js';
+import { locate, anchorAt } from '../public/js/anchor.js';
+import { triage, reopenAnchor } from '../public/js/triage.js';
 
 /**
  * @typedef {object} Env
@@ -91,9 +93,31 @@ async function touchMeta(kv, id) {
 
 const revKey = (id) => `rev:${id}`;
 const snapshotKey = (id, n) => `${id}/r/${n}.md`;
+const commentsKey = (id) => `comments:${id}`;
 
 async function readRevisions(kv, id) {
   return readJsonArray(kv, revKey(id));
+}
+
+async function readComments(kv, id) {
+  const raw = await kv.get(commentsKey(id));
+  if (!raw) return { nextId: 1, round: 1, items: [] };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { nextId: 1, round: 1, items: [] };
+  }
+}
+
+/** Raw comments value, or null when the note has none (or the value is unreadable). */
+async function readCommentsOrNull(kv, id) {
+  const raw = await kv.get(commentsKey(id));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** Remove a note's current object, every snapshot, and its revision log. */
@@ -107,6 +131,7 @@ async function deleteNoteObjects(env, id) {
     cursor = page.cursor;
   }
   await env.HISTORY.delete(revKey(id));
+  await env.HISTORY.delete(commentsKey(id));
 }
 
 function cleanMessage(raw) {
@@ -630,6 +655,12 @@ app.patch('/api/files/:id/visibility', async (c) => {
 
 // ── Edit + revisions ────────────────────────────────────────────────────────
 
+// Triage cost scales with note size × comment count (each comment scans the
+// source). Past this product — roughly 1 MB × 500 comments, measured at ~1.1 s
+// of CPU for 2 MB × 500 on an M1 — the re-check is skipped rather than risking
+// the Worker CPU limit on a save that has already succeeded.
+const TRIAGE_BUDGET = 5e8;
+
 app.put('/api/files/:id', async (c) => {
   const id = c.req.param('id');
   const user = c.get('user');
@@ -701,8 +732,33 @@ app.put('/api/files/:id', async (c) => {
   delete meta.archivedAt;
   await c.env.HISTORY.put(`meta:${id}`, JSON.stringify(meta));
 
+  // Re-check review comments against the new revision. The save has already
+  // succeeded; nothing here may turn it into an error.
+  let triageSummary = null;
+  try {
+    const comments = await readCommentsOrNull(c.env.HISTORY, id);
+    if (comments && comments.items.length) {
+      if (content.length * comments.items.length > TRIAGE_BUDGET) {
+        // Past the budget, leave the comments exactly as they are: the save
+        // has already succeeded, and the client shows them as not re-checked.
+        log.warn('comments.triageSkipped', {
+          fileId: id,
+          rev: n,
+          bytes: content.length,
+          items: comments.items.length,
+        });
+      } else {
+        const result = triage(comments, current, content, n);
+        await c.env.HISTORY.put(commentsKey(id), JSON.stringify(result.comments));
+        triageSummary = result.summary;
+      }
+    }
+  } catch (err) {
+    log.error('comments.triageFailed', { fileId: id, rev: n, error: String(err) });
+  }
+
   log.info('file.edit', { fileId: id, rev: n, bytes: content.length });
-  return c.json({ id, currentRev: n, revision });
+  return c.json({ id, currentRev: n, revision, triage: triageSummary });
 });
 
 app.get('/api/files/:id/revisions', async (c) => {
@@ -730,6 +786,188 @@ app.get('/api/files/:id/revisions/:n', async (c) => {
   const obj = await c.env.MD_FILES.get(snapshotKey(id, n));
   if (!obj) return c.json({ error: 'Revision not found' }, 404);
   return c.body(await obj.text(), 200, { 'content-type': 'text/markdown; charset=utf-8' });
+});
+
+// ── Comment routes ──────────────────────────────────────────────────────────
+// Owner-only review comments, one KV value per note. Anchors are resolved
+// against the current markdown source on write (see public/js/anchor.js).
+
+const MAX_COMMENTS = 500;
+const MAX_COMMENT_TEXT = 2000;
+const COMMENT_TAGS = ['fix', 'cut', 'q', 'keep', 'general'];
+const COMMENT_STATUSES = ['open', 'addressed'];
+
+/** Loads meta and answers null unless the caller owns the note. */
+async function ownedMeta(c) {
+  const meta = await loadMeta(c.env.HISTORY, c.req.param('id'));
+  if (!meta || !isOwner(meta, c.get('user'))) {
+    c.get('logger').warn('file.notFound', { fileId: c.req.param('id') });
+    return null;
+  }
+  return meta;
+}
+
+const cleanText = (v) => (typeof v === 'string' ? v.trim().slice(0, MAX_COMMENT_TEXT) : '');
+
+/** Tags whose item is meaningless without a note or a replacement. */
+const NEEDS_TEXT = ['fix', 'q', 'general'];
+const missingRequiredText = (item) => NEEDS_TEXT.includes(item.tag) && !item.note && !item.replace;
+
+function cleanAnchor(a) {
+  if (!a || typeof a !== 'object' || !Array.isArray(a.lines)) return null;
+  const lines = a.lines.map(Number);
+  if (lines.length !== 2 || !lines.every(Number.isInteger)) return null;
+  const anchor = {
+    quote: typeof a.quote === 'string' ? a.quote.slice(0, MAX_COMMENT_TEXT) : '',
+    approx: Boolean(a.approx),
+    prefix: typeof a.prefix === 'string' ? a.prefix.slice(-64) : '',
+    suffix: typeof a.suffix === 'string' ? a.suffix.slice(0, 64) : '',
+    lines,
+  };
+  if (a.block && typeof a.block === 'object') {
+    anchor.block = {
+      kind: cleanText(a.block.kind).slice(0, 40),
+      label: cleanText(a.block.label).slice(0, 200),
+    };
+  } else if (!anchor.quote.trim()) {
+    return null;
+  }
+  return anchor;
+}
+
+app.get('/api/files/:id/comments', async (c) => {
+  if (!(await ownedMeta(c))) return c.json({ error: 'File not found' }, 404);
+  const { round, items, lastTriage } = await readComments(c.env.HISTORY, c.req.param('id'));
+  return c.json({ round, items, lastTriage });
+});
+
+app.post('/api/files/:id/comments', async (c) => {
+  const id = c.req.param('id');
+  const meta = await ownedMeta(c);
+  if (!meta) return c.json({ error: 'File not found' }, 404);
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+  if (!body || typeof body !== 'object') return c.json({ error: 'Invalid JSON' }, 400);
+  const tag = body.tag;
+  if (!COMMENT_TAGS.includes(tag)) return c.json({ error: 'Invalid tag' }, 400);
+  const note = cleanText(body.note);
+  const replace = cleanText(body.replace);
+  if (missingRequiredText({ tag, note, replace })) {
+    return c.json({ error: 'A note is required' }, 400);
+  }
+
+  const comments = await readComments(c.env.HISTORY, id);
+  if (comments.items.length >= MAX_COMMENTS) return c.json({ error: 'Too many comments' }, 400);
+
+  let anchor;
+  if (tag === 'general') {
+    if (comments.items.some((i) => i.tag === 'general')) {
+      return c.json({ error: 'General note already exists' }, 400);
+    }
+  } else {
+    anchor = cleanAnchor(body.anchor);
+    if (!anchor) return c.json({ error: 'Invalid anchor' }, 400);
+    const obj = await c.env.MD_FILES.get(`${id}.md`);
+    if (!obj) return c.json({ error: 'File not found' }, 404);
+    const sourceText = await obj.text();
+    const hit = locate(sourceText, anchor);
+    if (!hit) return c.json({ error: 'Anchor not found' }, 409);
+    // Context drives triage later (replacedBy is found between prefix and suffix),
+    // so never trust the client's copy of it.
+    anchor =
+      hit.start == null
+        ? { ...anchor, lines: hit.lines }
+        : anchorAt(sourceText, hit.start, hit.end);
+  }
+
+  const item = {
+    id: `${tag === 'keep' ? 'k' : 'c'}${comments.nextId}`,
+    tag,
+    note,
+    ...(replace ? { replace } : {}),
+    ...(anchor ? { anchor } : {}),
+    rev: meta.currentRev || 0,
+    status: 'open',
+    carried: 0,
+    authorId: c.get('user').id,
+    createdAt: new Date().toISOString(),
+  };
+  comments.nextId += 1;
+  comments.items.push(item);
+  await c.env.HISTORY.put(commentsKey(id), JSON.stringify(comments));
+  c.get('logger').info('comment.create', { fileId: id, commentId: item.id, tag });
+  return c.json({ item }, 201);
+});
+
+app.patch('/api/files/:id/comments/:cid', async (c) => {
+  const id = c.req.param('id');
+  const meta = await ownedMeta(c);
+  if (!meta) return c.json({ error: 'File not found' }, 404);
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+  if (!body || typeof body !== 'object') return c.json({ error: 'Invalid JSON' }, 400);
+  const comments = await readComments(c.env.HISTORY, id);
+  const item = comments.items.find((i) => i.id === c.req.param('cid'));
+  if (!item) return c.json({ error: 'Comment not found' }, 404);
+
+  if (body.tag !== undefined && body.tag !== item.tag) {
+    const fixed = ['keep', 'general'];
+    if (!COMMENT_TAGS.includes(body.tag) || fixed.includes(body.tag) || fixed.includes(item.tag)) {
+      return c.json({ error: 'Invalid tag change' }, 400);
+    }
+    item.tag = body.tag;
+  }
+  if (body.status !== undefined) {
+    if (item.status === 'violated' || !COMMENT_STATUSES.includes(body.status)) {
+      return c.json({ error: 'Invalid status' }, 400);
+    }
+    if (item.status === 'addressed' && body.status === 'open' && item.anchor) {
+      const obj = await c.env.MD_FILES.get(`${id}.md`);
+      if (!obj) return c.json({ error: 'File not found' }, 404);
+      item.anchor = reopenAnchor(await obj.text(), item);
+      delete item.replacedBy;
+      delete item.resolvedLines;
+      delete item.resolvedRev;
+      delete item.linesRev;
+      item.rev = meta.currentRev || 0;
+      // The comment now points at text that only appeared in this revision, so
+      // it has survived no rounds: "unchanged since round N" would be a lie.
+      item.carried = 0;
+    }
+    item.status = body.status;
+  }
+  if (body.note !== undefined) item.note = cleanText(body.note);
+  if (body.replace !== undefined) {
+    const replace = cleanText(body.replace);
+    if (replace) item.replace = replace;
+    else delete item.replace;
+  }
+  // Same rule as POST, applied to the merged item: a PATCH must not leave a
+  // fix/q/general with nothing to act on. `item` is mutated in memory only —
+  // returning before the put leaves the stored comment untouched.
+  if (missingRequiredText(item)) return c.json({ error: 'A note is required' }, 400);
+  await c.env.HISTORY.put(commentsKey(id), JSON.stringify(comments));
+  return c.json({ item });
+});
+
+app.delete('/api/files/:id/comments/:cid', async (c) => {
+  const id = c.req.param('id');
+  if (!(await ownedMeta(c))) return c.json({ error: 'File not found' }, 404);
+  const comments = await readComments(c.env.HISTORY, id);
+  const before = comments.items.length;
+  comments.items = comments.items.filter((i) => i.id !== c.req.param('cid'));
+  if (comments.items.length === before) return c.json({ error: 'Comment not found' }, 404);
+  await c.env.HISTORY.put(commentsKey(id), JSON.stringify(comments));
+  c.get('logger').info('comment.delete', { fileId: id, commentId: c.req.param('cid') });
+  return c.json({ success: true });
 });
 
 // ── File delete ─────────────────────────────────────────────────────────────

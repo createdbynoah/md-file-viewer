@@ -1,5 +1,7 @@
 // Deterministic UAT seed. Only reachable through /api/dev/seed, which is
 // mounted only when isDevEnv() is true (see worker.js). Replaces, never appends.
+import { triage } from '../public/js/triage.js';
+import { captureAnchor } from '../public/js/anchor.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const ago = (days) => new Date(Date.now() - days * DAY).toISOString();
@@ -17,6 +19,8 @@ export const SEED_IDS = {
   expiring: '99999999-9999-4999-8999-999999999999',
   otherPrivate: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   otherLink: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  review: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  round2: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
 };
 
 const OWNER = 'user_local_dev';
@@ -106,6 +110,124 @@ function note(
   return { id, content, meta };
 }
 
+const REVIEW = [
+  '# Rollout plan', // 1
+  '', // 2
+  'We will ship to all customers in a single release after the beta ends.', // 3
+  'Rollback is a **one-line** flag flip.', // 4
+  '', // 5
+  '## Costs', // 6
+  '', // 7
+  '| Item | Monthly |', // 8
+  '| --- | --- |', // 9
+  '| Workers | $5 |', // 10
+  '| R2 | $2 |', // 11
+  '', // 12
+  'The beta is small. The beta is closed.', // 13
+  '',
+].join('\n');
+
+const REVIEW_COMMENTS = {
+  nextId: 5,
+  round: 1,
+  items: [
+    {
+      id: 'c1',
+      tag: 'fix',
+      note: 'Stage it: 5% → 25% → 100%',
+      anchor: {
+        quote: 'all customers in a single release',
+        approx: false,
+        prefix: 'We will ship to ',
+        suffix: ' after the beta ends.',
+        lines: [3, 3],
+      },
+    },
+    {
+      id: 'k2',
+      tag: 'keep',
+      note: '',
+      anchor: { quote: 'Rollback is a', approx: false, prefix: '', suffix: '', lines: [4, 4] },
+    },
+    {
+      id: 'c3',
+      tag: 'q',
+      note: 'Are these list prices?',
+      anchor: {
+        quote: '',
+        approx: false,
+        prefix: '',
+        suffix: '',
+        lines: [8, 11],
+        block: { kind: 'table', label: 'table under "Costs"' },
+      },
+    },
+    { id: 'c4', tag: 'general', note: 'Tone is too salesy overall' },
+  ].map((i) => ({
+    ...i,
+    rev: 0,
+    status: 'open',
+    carried: 0,
+    authorId: OWNER,
+    createdAt: ago(0),
+  })),
+};
+
+// "Review round 2": a triaged note with real revision history, seeded by
+// running the actual triage() over a V1 -> V2 edit instead of hand-writing
+// the resulting comment statuses.
+const ROUND_V1 = [
+  '# Launch brief', // 1
+  '', // 2
+  'We will ship to all customers in a single release.', // 3
+  'Latency target: p95 under 200 ms.', // 4
+  'Rollback is a one-line flag flip.', // 5
+  '', // 6
+  'The beta ends soon.', // 7
+  '',
+].join('\n');
+const ROUND_V2 = ROUND_V1.replace(
+  'all customers in a single release',
+  'customers in three stages'
+).replace('200 ms', '250 ms');
+
+const roundItem = (id, tag, note, anchor) => ({
+  id,
+  tag,
+  note,
+  anchor,
+  rev: 0,
+  status: 'open',
+  carried: 0,
+  authorId: OWNER,
+  createdAt: ago(1),
+});
+const ROUND_COMMENTS = triage(
+  {
+    nextId: 5,
+    round: 1,
+    items: [
+      roundItem(
+        'c1',
+        'fix',
+        'Stage it',
+        captureAnchor(ROUND_V1, [3, 3], 'all customers in a single release')
+      ),
+      roundItem('k2', 'keep', '', captureAnchor(ROUND_V1, [4, 4], 'p95 under 200 ms')),
+      roundItem('c3', 'fix', 'Give a date', captureAnchor(ROUND_V1, [7, 7], 'soon')),
+      roundItem(
+        'k4',
+        'keep',
+        '',
+        captureAnchor(ROUND_V1, [5, 5], 'Rollback is a one-line flag flip.')
+      ),
+    ],
+  },
+  ROUND_V1,
+  ROUND_V2,
+  1
+).comments;
+
 // Revisions for the drawer/diff UAT: original + two edits on "Code blocks".
 const codeV1 = CODE.replace('Inline `code` too.', 'Inline `code` too. Edited once.');
 const codeV2 = codeV1 + '\nSecond edit appends a line.\n';
@@ -165,10 +287,14 @@ export async function seedScenarios(env) {
       ownerId: OTHER,
       visibility: 'link',
     }),
+    note(SEED_IDS.review, 'Review me', REVIEW, { createdDays: 0 }),
+    note(SEED_IDS.round2, 'Review round 2', ROUND_V2, { createdDays: 1 }),
   ];
 
   // "Code blocks" ships with a revision history (see codeRevisions below).
   notes.find((n) => n.id === SEED_IDS.code).meta.currentRev = 2;
+  // "Review round 2" ships already triaged against its rev 1 edit.
+  notes.find((n) => n.id === SEED_IDS.round2).meta.currentRev = 1;
 
   for (const n of notes) {
     await env.MD_FILES.put(`${n.id}.md`, n.content);
@@ -192,6 +318,20 @@ export async function seedScenarios(env) {
   await env.MD_FILES.put(`${SEED_IDS.code}/r/2.md`, codeV2);
   await env.HISTORY.put(`rev:${SEED_IDS.code}`, JSON.stringify(codeRevisions));
 
+  const roundRevisions = [
+    {
+      n: 1,
+      at: ago(1),
+      by: `${OWNER}@dev.local`,
+      message: 'Agent revision',
+      bytes: ROUND_V2.length,
+    },
+    { n: 0, at: ago(1), by: `${OWNER}@dev.local`, message: 'Original', bytes: ROUND_V1.length },
+  ];
+  await env.MD_FILES.put(`${SEED_IDS.round2}/r/0.md`, ROUND_V1);
+  await env.MD_FILES.put(`${SEED_IDS.round2}/r/1.md`, ROUND_V2);
+  await env.HISTORY.put(`rev:${SEED_IDS.round2}`, JSON.stringify(roundRevisions));
+
   const notesByOwner = (ownerId) =>
     notes
       .filter((n) => n.meta.ownerId === ownerId)
@@ -210,6 +350,9 @@ export async function seedScenarios(env) {
     { id: SEED_IDS.archived, filename: 'Archived note', source: 'paste', viewedAt: ago(31) },
   ];
   await env.HISTORY.put(`history:${OWNER}`, JSON.stringify(history));
+
+  await env.HISTORY.put(`comments:${SEED_IDS.review}`, JSON.stringify(REVIEW_COMMENTS));
+  await env.HISTORY.put(`comments:${SEED_IDS.round2}`, JSON.stringify(ROUND_COMMENTS));
 
   return {
     notes: notes.length,

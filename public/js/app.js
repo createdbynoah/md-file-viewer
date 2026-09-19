@@ -5,6 +5,8 @@ import {
   loadScrollRatio,
 } from './scroll-memory.js';
 import { nextHeaderState } from './header-autohide.js';
+import { sourceLines } from './source-lines.js';
+import { initComments } from './comments-ui.js';
 
 // ── Client logger ───────────────────────────────────────────────────────────
 
@@ -44,6 +46,7 @@ const md = window.markdownit({
     return '';
   },
 });
+md.use(sourceLines);
 
 // ── DOM refs ────────────────────────────────────────────────────────────────
 
@@ -92,6 +95,14 @@ const editorMessage = document.getElementById('editor-message');
 const editorPreviewBtn = document.getElementById('editor-preview-btn');
 const editorCancelBtn = document.getElementById('editor-cancel-btn');
 const editorSaveBtn = document.getElementById('editor-save-btn');
+const reviewBtn = document.getElementById('review-btn');
+const copyFeedbackBtn = document.getElementById('copy-feedback-btn');
+const copyFeedbackMenuBtn = document.getElementById('copy-feedback-menu-btn');
+const copyFeedbackMenu = document.getElementById('copy-feedback-menu');
+const reviewBanner = document.getElementById('review-banner');
+const commentsRail = document.getElementById('comments-rail');
+const commentsListBtn = document.getElementById('comments-list-btn');
+const commentsDrawer = document.getElementById('comments-drawer');
 
 let foldersData = [];
 let currentFileId = null;
@@ -343,6 +354,39 @@ async function api(path, opts = {}) {
 let currentUser = null;
 let currentNote = null; // { id, owned, visibility, currentRev }
 
+const comments = initComments({
+  root: renderedOutput,
+  scroller: document.querySelector('.viewer-scroll'),
+  rail: commentsRail,
+  drawer: commentsDrawer,
+  listBtn: commentsListBtn,
+  reviewBtn,
+  copyBtn: copyFeedbackBtn,
+  banner: reviewBanner,
+  copyMenuBtn: copyFeedbackMenuBtn,
+  copyMenu: copyFeedbackMenu,
+  // The folder dropdown and ••• menu each stop click propagation on their own
+  // opener button, so opening the copy ▾ menu wouldn't otherwise close them.
+  closeOtherMenus: () => {
+    folderDropdown.hidden = true;
+    closeMoreMenu();
+  },
+  diffWords: (a, b) => window.Diff.diffWords(a, b),
+  api,
+  getNote: () => currentNote,
+  getSource: () => currentRawMarkdown,
+  getTitle: () => currentFilename || 'Untitled',
+  flashCopied,
+  // Re-fetch and re-render the note after the server reports the source moved
+  // under us (POST /comments → 409), so the next selection anchors cleanly.
+  reloadNote: () => viewFile(currentNote.id, { updateUrl: false }),
+  // Review mode is unavailable while editing or viewing a read-only revision
+  // snapshot (see applyOwnerControls and the revViewBtn/closeRevisions wiring).
+  canReview: () => !editing && !snapshotShown,
+  // Review mode pins the header (see headerLocked).
+  onModeChange: () => showHeader(),
+});
+
 async function checkAuth() {
   try {
     const res = await api('/api/auth/check');
@@ -388,6 +432,9 @@ function showLogin() {
   loginLink.href = `/api/auth/login${next}`;
   loginScreen.hidden = false;
   appScreen.hidden = true;
+  // Review chrome (pill, bar, sheets) is appended to document.body, so it would
+  // otherwise float over the login screen after a 401 mid-review.
+  comments.clear();
   stopPolling();
 }
 
@@ -864,6 +911,8 @@ folderBtn.addEventListener('click', (e) => {
     folderDropdown.hidden = true;
     return;
   }
+  copyFeedbackMenu.hidden = true; // its own opener stops propagation, so close it here
+  copyFeedbackMenuBtn.setAttribute('aria-expanded', 'false');
   renderFolderDropdown();
   folderDropdown.hidden = false;
 });
@@ -972,6 +1021,8 @@ async function viewFile(id, { updateUrl = true } = {}) {
     };
     copyMdBtn.hidden = false;
     applyOwnerControls();
+    comments.setReviewMode(false);
+    comments.load();
     if (data.created) {
       const d = new Date(data.created);
       viewerCreated.textContent =
@@ -998,6 +1049,8 @@ function applyOwnerControls() {
   folderBtn.hidden = !owned;
   visibilityBtn.hidden = !owned;
   editBtn.hidden = !owned || editing;
+  reviewBtn.hidden = !owned || editing || snapshotShown;
+  if (!owned) copyFeedbackBtn.hidden = true;
   historyBtn.hidden = !currentNote;
   copyLinkBtn.hidden = !(currentNote && currentNote.visibility === 'link');
   if (owned) {
@@ -1032,6 +1085,7 @@ function renderMarkdown(content, title, id) {
   renderedOutput.innerHTML = md.render(content);
   addCodeCopyButtons();
   wrapTables();
+  comments.refresh();
   window.scrollTo(0, 0);
   viewerTitle.textContent = title || 'Markdown Viewer';
   currentFilename = title || 'Markdown Viewer';
@@ -1086,6 +1140,7 @@ function showInputArea({ updateUrl = true } = {}) {
   currentRawMarkdown = null;
   currentFilename = null;
   currentNote = null;
+  comments.clear();
   copyMdBtn.hidden = true;
   folderBtn.hidden = true;
   visibilityBtn.hidden = true;
@@ -1104,6 +1159,7 @@ let saving = false;
 
 function enterEditMode() {
   if (!currentNote || !currentNote.owned || currentRawMarkdown == null) return;
+  comments.setReviewMode(false);
   editing = true;
   editorInput.value = currentRawMarkdown;
   editorInput.hidden = false;
@@ -1156,6 +1212,10 @@ async function saveEdit() {
     // The saved edit adds a revision; drop cached snapshots and reset the drawer.
     snapshotCache.clear();
     closeRevisions();
+    // Kick off the re-triaged reload before exiting edit mode: exitEditMode's
+    // render calls comments.refresh(), which no-ops while comments.load() is
+    // in flight, so the pre-save comments never flash against the new source.
+    comments.load();
     exitEditMode();
     syncSidebar('file-edit');
   } catch (e) {
@@ -1241,6 +1301,7 @@ function fmtWhen(iso) {
 }
 
 async function openRevisions() {
+  comments.setReviewMode(false);
   if (!currentNote) return;
   const res = await fetch(`/api/files/${encodeURIComponent(currentNote.id)}/revisions`);
   if (!res.ok) return;
@@ -1294,6 +1355,9 @@ function closeRevisions() {
       );
       restoreScroll(currentNote.id);
     }
+    // Review mode was unavailable while the snapshot was shown; bring the
+    // Review button back now that the current note is restored.
+    applyOwnerControls();
   }
 }
 
@@ -1342,6 +1406,10 @@ revViewBtn.addEventListener('click', async () => {
     wrapTables();
     viewerTitle.textContent = `${currentFilename} — revision #${n}`;
     snapshotShown = true;
+    // Review mode (and its highlights/rail) must not stay up against a
+    // read-only snapshot of stale-relative-to-source content.
+    comments.setReviewMode(false);
+    applyOwnerControls();
   } catch {
     revDiff.textContent = 'Could not load revisions.';
   }
@@ -1405,9 +1473,11 @@ let headerFrame = 0;
 function headerLocked() {
   return (
     editing ||
+    comments.isReviewing() ||
     !revisionsDrawer.hidden ||
     !moreMenu.hidden ||
     !folderDropdown.hidden ||
+    !copyFeedbackMenu.hidden ||
     viewerHeader.querySelector(':focus-visible') !== null
   );
 }
@@ -1459,6 +1529,8 @@ moreBtn.addEventListener('click', (e) => {
     return;
   }
   folderDropdown.hidden = true;
+  copyFeedbackMenu.hidden = true; // its own opener stops propagation, so close it here
+  copyFeedbackMenuBtn.setAttribute('aria-expanded', 'false');
   moreMenu.textContent = '';
   for (const btn of viewerHeader.querySelectorAll('[data-secondary]')) {
     if (btn.hidden) continue;

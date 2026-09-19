@@ -876,9 +876,21 @@ body {
   display: none;
 }
 
-/* Buttons with a long and short label show the short one on narrow screens. */
+/* Buttons with a long and short label show the short one on narrow screens.
+   The swap starts at the tablet breakpoint, not the mobile one: the toolbar is
+   already tight at 768–1023, more so in review mode. */
 .label-short {
   display: none;
+}
+
+@media (max-width: 1023px) {
+  .label-long {
+    display: none;
+  }
+
+  .label-short {
+    display: inline;
+  }
 }
 
 .viewer-toolbar {
@@ -1189,14 +1201,6 @@ body {
     color: var(--danger);
   }
 
-  .label-long {
-    display: none;
-  }
-
-  .label-short {
-    display: inline;
-  }
-
   .markdown-body {
     padding: 24px 16px;
   }
@@ -1352,4 +1356,472 @@ body.read-only #back-btn {
 .rev-diff .del {
   background: color-mix(in srgb, #f85149 20%, transparent);
   text-decoration: line-through;
+}
+
+/* ── Review comments (desktop, phase A1) ─────────────────────────────────── */
+
+:root {
+  --review-fix: rgba(255, 212, 0, 0.35);
+  --review-keep: rgba(46, 160, 67, 0.25);
+  --review-cut: rgba(207, 34, 46, 0.2);
+}
+
+::highlight(review-fix) {
+  background-color: var(--review-fix);
+}
+::highlight(review-keep) {
+  background-color: var(--review-keep);
+}
+::highlight(review-cut) {
+  background-color: var(--review-cut);
+  text-decoration: line-through;
+}
+::highlight(review-active) {
+  background-color: var(--accent-subtle);
+}
+/* The text a composer is open for; stands in for the page selection, which
+   the composer's focus clears. */
+::highlight(review-pending) {
+  background-color: var(--accent-subtle);
+  text-decoration: underline 2px var(--accent);
+  text-underline-offset: 3px;
+}
+
+#review-btn[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+.viewer-scroll.reviewing {
+  position: relative;
+}
+@media (min-width: 1024px) {
+  .viewer-scroll.reviewing .markdown-body {
+    padding-right: max(316px, calc((100% - 860px) / 2));
+  }
+  /* Keep the banner (and its Dismiss) clear of the rail, like the note body. */
+  .viewer-scroll.reviewing .review-banner {
+    margin-right: max(316px, calc((100% - 860px) / 2));
+  }
+}
+.viewer-scroll.reviewing [data-line].review-block {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+.comments-rail {
+  position: absolute;
+  top: 0;
+  right: 16px;
+  width: 280px;
+}
+.comment-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 8px 10px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.comment-card.is-active {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
+  z-index: 2;
+}
+.comment-card.is-addressed {
+  opacity: 0.6;
+}
+.comment-card[data-tag='keep'] {
+  border-left: 3px solid #2ea043;
+}
+.comment-card[data-tag='cut'] {
+  border-left: 3px solid var(--danger);
+}
+.comment-card-head {
+  display: flex;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.comment-card-note {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.comment-card-actions {
+  display: none;
+  gap: 10px;
+  margin-top: 6px;
+}
+.comment-card.is-active .comment-card-actions {
+  display: flex;
+}
+.comment-card-actions button {
+  font-size: 0.75rem;
+  padding: 0;
+}
+.comments-general {
+  position: static;
+  margin-bottom: 8px;
+}
+
+.comment-popover {
+  position: absolute;
+  z-index: 60;
+  width: 300px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.comment-tags {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.comment-tags button {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.comment-tags button[aria-pressed='true'] {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.comment-popover textarea,
+.comment-popover input,
+.review-sheet textarea,
+.review-sheet input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
+}
+.comment-popover input,
+.review-sheet input {
+  margin-top: 6px;
+}
+/* A touch device wide enough for the popover composer (landscape phone, tablet)
+   still needs 16px fields, or iOS zooms the page in on focus and stays there. */
+@media (pointer: coarse) {
+  .comment-popover textarea,
+  .comment-popover input {
+    font-size: 1rem;
+  }
+}
+.comment-composer-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+.comment-composer-foot .comment-hint {
+  margin-right: auto;
+}
+.comment-composer-foot .comment-save {
+  padding: 4px 12px;
+  font-size: 0.8125rem;
+}
+.comment-error {
+  color: var(--danger);
+}
+
+.comment-gutter-btn {
+  position: absolute;
+  z-index: 5;
+  width: 22px;
+  height: 22px;
+  line-height: 20px;
+  padding: 0;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* ── Review comments: tablet drawer, mobile sheets (phase A2) ────────────── */
+
+/* Cards are absolutely placed only in the desktop rail. */
+.comments-list .comment-card,
+.comment-popover .comment-card,
+.review-sheet .comment-card {
+  position: static;
+  margin-bottom: 8px;
+}
+.comment-popover .comment-card,
+.review-sheet[data-kind='item'] .comment-card {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: default;
+}
+.comments-drawer {
+  max-height: 40vh;
+}
+
+@media (max-width: 1023px) {
+  .comments-rail,
+  .comment-gutter-btn {
+    display: none !important;
+  }
+}
+
+/* Touch has no hover, so the note itself is the tap target for a highlight or a
+   block comment; make that legible and drop the grey tap flash. */
+@media (pointer: coarse) {
+  .viewer-scroll.reviewing #rendered-output {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.comment-pill,
+.review-bar,
+.review-sheet {
+  position: fixed;
+  isolation: isolate;
+}
+/* iOS 26 Safari tints its bars from the background-color of fixed chrome, so
+   paint these through ::before instead (same rule as the sticky header). */
+.comment-pill::before,
+.review-bar::before,
+.review-sheet::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+}
+
+.comment-pill {
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 66;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 999px;
+  /* Buttons get a UA background (e.g. buttonface) by default, which would
+     defeat the ::before-only-paints-background rule above. */
+  background: none;
+  appearance: none;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #fff;
+  box-shadow: var(--shadow-lg);
+}
+.comment-pill::before {
+  background: var(--accent);
+}
+.review-bar:not([hidden]) ~ .comment-pill {
+  bottom: calc(68px + env(safe-area-inset-bottom));
+}
+
+.review-bar {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 65;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+.review-bar[hidden] {
+  display: none;
+}
+.review-bar::before {
+  background: var(--bg);
+}
+.review-bar-summary {
+  margin-right: auto;
+}
+
+.review-sheet {
+  left: 0;
+  right: 0;
+  bottom: var(--kb-inset, 0px);
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, calc(100vh - var(--kb-inset, 0px) - 48px));
+  max-height: min(70dvh, calc(100dvh - var(--kb-inset, 0px) - 48px));
+  padding: 8px 16px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-lg);
+}
+.review-sheet::before {
+  background: var(--bg);
+}
+.review-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.review-sheet-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.review-sheet-quote {
+  margin: 0 0 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 16px inputs stop iOS from zooming the page when the note field is focused. */
+.review-sheet textarea,
+.review-sheet input {
+  font-size: 1rem;
+}
+.review-sheet .comment-tags button {
+  font-size: 0.875rem;
+  padding: 6px 12px;
+}
+.review-sheet .comment-hint {
+  display: none;
+}
+.review-sheet .comment-card-actions {
+  display: flex;
+}
+.comments-list .comment-card-actions {
+  display: flex;
+}
+
+@media (max-width: 767px) {
+  /* Room for the review bar so the note's last lines stay reachable. */
+  .viewer-scroll.reviewing {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  /* The mobile sidebar (z 30) slides over the note, but the review chrome lives
+     on document.body at z 65/66; get it out of the way while the drawer is up.
+     Desktop is untouched: there .sidebar.open is the resting state. */
+  body:has(#sidebar.open) .review-bar,
+  body:has(#sidebar.open) .comment-pill {
+    display: none;
+  }
+}
+
+/* Review mode adds three more buttons to a toolbar that is already full at
+   tablet widths, and the ••• collapse only starts below 768; let the row wrap
+   instead of wrapping each button's label onto two lines. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .viewer-toolbar-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 4px;
+  }
+
+  .viewer-toolbar .text-btn {
+    white-space: nowrap;
+  }
+}
+
+/* ── Review comments: triage (phase A3) ──────────────────────────────────── */
+
+.review-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px max(24px, calc((100% - 860px) / 2)) 0;
+  padding: 8px 12px;
+  font-size: 0.8125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+.review-banner[hidden] {
+  display: none;
+}
+.review-banner.has-violations {
+  border-color: var(--danger);
+}
+.review-banner-text {
+  margin-right: auto;
+}
+
+.comment-card.is-violated {
+  border-color: var(--danger);
+  border-left: 3px solid var(--danger);
+}
+.comment-card.is-violated .comment-card-actions {
+  display: flex;
+}
+.comment-diff {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.comment-diff del {
+  background: var(--review-cut);
+}
+.comment-diff ins {
+  background: var(--review-keep);
+  text-decoration: none;
+}
+
+.comments-addressed {
+  margin-top: 8px;
+  font-size: 0.8125rem;
+}
+.comments-addressed > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+.comments-addressed .comment-card {
+  position: static;
+  margin-top: 8px;
+}
+.comments-addressed .comment-card-actions {
+  display: flex;
+}
+
+.copy-feedback-more {
+  position: relative;
+}
+@media (max-width: 767px) {
+  .copy-feedback-more {
+    display: none;
+  }
+}
+.review-sheet-copy {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
 }
